@@ -75,8 +75,9 @@ strings, so the templates are where message/row structure lives.
 #lightbox                   image viewer, JS toggles [hidden]; ←/→, the
                             #lightbox-prev/#lightbox-next arrows and swiping
                             step through the surrounding gallery; clicking the
-                            image toggles .lightbox--zoomed (natural size,
-                            panned by scrolling)
+                            image toggles .lightbox--zoomed (swaps in the
+                            full-resolution original, natural size, panned by
+                            scrolling)
   #lightbox-img  #lightbox-caption  #lightbox-download  #lightbox-close
 #modal-root                 JS mounts dialogs here (see below)
 #toasts                     JS appends .toast elements
@@ -166,9 +167,14 @@ which uses `.modal-open` on `<body>` for scroll locking. Close buttons carry
   `button.combo` preset pairs), `.combo-sidebar` / `.combo-chat`
   (`input[type=color]`) and `.combo-reset` — these save to
   `localStorage["slock:colors"]` and apply immediately, outside the form submit;
-  plus display prefs: `.seg[data-setting=density|side]` segmented toggles and the
+  plus display prefs: `.seg[data-setting=density|side]` segmented toggles, the
   zoom stepper (`.zoom-range`, `.zoom-step[data-dir]`, `.zoom-val` — click to
-  reset to 100%), all device-local and applied on change
+  reset to 100%) and the font picker (`.font-select`, JS fills it with curated
+  stacks minus faces `document.fonts.check` rules out, plus a Custom… entry
+  that reveals `.font-custom` free text and an Upload… entry that clicks the
+  hidden `.font-file` input — the uploaded face is stored in IndexedDB, listed
+  as "Uploaded: <name>", and `.font-remove` deletes it), all device-local and
+  applied on change
 - `#tpl-modal-password` → `[name=current_password]`, `[name=new_password]`,
   `[name=confirm_password]`, `.mform-error`, `.mform-submit`
   (JS force-opens this when `must_change_pw` is true and hides its close button
@@ -202,6 +208,7 @@ which uses `.modal-open` on `<body>` for scroll locking. Close buttons carry
 |---|---|---|
 | `<html>` | `data-theme="dark"` / `"light"` | theme choice (default: follow system) |
 | `<html>` | `--zoom` (inline style) | view zoom factor, 1 = 100% (`localStorage["slock:zoom"]`); `#app` divides its size by it and sets `zoom` so the scaled view still fills the viewport |
+| `<html>` | `--font-sans` (inline style) | UI font stack override (`localStorage["slock:font"]`, absent = stylesheet default); the whole interface derives from this token. An uploaded font's bytes live in IndexedDB (`slock`/`fonts`) and register as the `slock-custom` family at boot |
 | `<body>` | `.side-right` / `.side-left` | which side the sidebar sits on |
 | `<body>` | `.density-compact` | compact messages: no avatar column, author + time inline (`localStorage["slock:density"]`) |
 | `<body>` | `.nav-open` | mobile drawer open |

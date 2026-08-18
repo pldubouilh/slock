@@ -190,6 +190,7 @@ const LS = {
   density: 'slock:density',
   sidebarW: 'slock:sidebar-width',
   zoom: 'slock:zoom',
+  font: 'slock:font',
   lastChannel: 'slock:last-channel',
   drafts: 'slock:drafts',
 };
@@ -1663,8 +1664,10 @@ function showLightboxAt(i) {
   box.classList.remove('lightbox--zoomed');
   const el = byId('lightbox-img');
   if (el) {
+    // Fit view uses the fast display variant; zooming swaps in the original.
     el.src = img.dataset.display || img.src;
     el.alt = img.dataset.filename || '';
+    el.dataset.original = img.dataset.original || img.src;
   }
   const cap = byId('lightbox-caption');
   if (cap) cap.textContent = img.dataset.filename || '';
@@ -1704,8 +1707,17 @@ function wireLightbox() {
   on(byId('lightbox-prev'), 'click', () => lightboxStep(-1));
   on(byId('lightbox-next'), 'click', () => lightboxStep(1));
   // Clicking the image toggles zoom (fit ↔ natural size, panned by scrolling).
+  // Zoom means actual pixels, so entering it swaps the downscaled display
+  // variant for the untouched original; the browser keeps showing the old
+  // frame until the sharper one arrives.
   on(byId('lightbox-img'), 'click', () => {
-    if (box) box.classList.toggle('lightbox--zoomed');
+    if (!box) return;
+    const el = byId('lightbox-img');
+    if (!box.classList.contains('lightbox--zoomed') && el
+      && el.dataset.original && el.getAttribute('src') !== el.dataset.original) {
+      el.src = el.dataset.original;
+    }
+    box.classList.toggle('lightbox--zoomed');
   });
   on(box, 'click', (e) => {
     // Backdrop click closes; clicks on the image/caption/download do not.
@@ -2923,6 +2935,126 @@ function openProfileModal() {
   on(zoomVal, 'click', () => { setZoom(1); syncZoom(); }); // click % to reset
   syncZoom();
 
+  const fontSel = m.q('.font-select');
+  const fontCustom = m.q('.font-custom');
+  const fontFile = m.q('.font-file');
+  const fontRemove = m.q('.font-remove');
+  if (fontSel) {
+    // Skip faces this machine provably lacks. Best effort: entries without a
+    // probe are always offered, and a false positive still renders fine
+    // through the stack's fallbacks.
+    const canCheck = !!(document.fonts && document.fonts.check);
+    for (const f of FONTS) {
+      if (f.probe && canCheck && !document.fonts.check(`12px "${f.probe}"`)) continue;
+      const opt = document.createElement('option');
+      opt.value = f.stack;
+      opt.textContent = f.name;
+      if (f.stack) opt.style.fontFamily = f.stack; // preview, where supported
+      fontSel.append(opt);
+    }
+    const custom = document.createElement('option');
+    custom.value = '__custom';
+    custom.textContent = 'Custom…';
+    fontSel.append(custom);
+    const upload = document.createElement('option');
+    upload.value = '__upload';
+    upload.textContent = 'Upload…';
+    fontSel.append(upload);
+
+    // The uploaded font's option exists whenever a record does, labelled with
+    // the original filename and slotted before Custom….
+    const ensureUploadedOption = (name) => {
+      let opt = [...fontSel.options].find((o) => o.value === FONT_UPLOADED_STACK);
+      if (!opt) {
+        opt = document.createElement('option');
+        opt.value = FONT_UPLOADED_STACK;
+        opt.style.fontFamily = FONT_UPLOADED_STACK;
+        fontSel.insertBefore(opt, custom);
+      }
+      opt.textContent = `Uploaded: ${name}`;
+      if (fontRemove) fontRemove.hidden = false;
+    };
+
+    // Reflect the applied choice; a stack no option claims is a custom one.
+    const sync = () => {
+      const cur = localStorage.getItem(LS.font) || '';
+      if ([...fontSel.options].some((o) => o.value === cur)) {
+        fontSel.value = cur;
+        if (fontCustom && cur !== '__custom') fontCustom.hidden = true;
+      } else if (cur && fontCustom && !cur.startsWith(`"${FONT_UPLOADED_FAMILY}"`)) {
+        fontSel.value = '__custom';
+        fontCustom.hidden = false;
+        fontCustom.value = cur.split(',')[0].trim().replace(/^"|"$/g, '');
+      }
+    };
+    sync();
+    // The uploaded entry arrives async; a stored stack pointing at it selects
+    // properly once the record's name is known. A stale stack whose bytes are
+    // gone (cleared IDB) degrades back to System.
+    loadUploadedFont().then((rec) => {
+      const cur = localStorage.getItem(LS.font) || '';
+      if (rec && rec.name) ensureUploadedOption(rec.name);
+      else if (cur === FONT_UPLOADED_STACK) setFont('');
+      sync();
+    }).catch(() => {});
+
+    on(fontSel, 'change', () => {
+      if (fontSel.value === '__custom') {
+        if (fontCustom) { fontCustom.hidden = false; fontCustom.focus(); }
+        return;
+      }
+      if (fontCustom) fontCustom.hidden = true;
+      if (fontSel.value === '__upload') {
+        if (fontFile) fontFile.click();
+        return; // sync() restores the selection after the dialog resolves
+      }
+      setFont(fontSel.value); // '' (System) clears back to the default
+    });
+    // Free-text: any installed face by exact name, default stack as fallback.
+    on(fontCustom, 'input', () => {
+      const name = fontCustom.value.trim().replace(/"/g, '');
+      setFont(name ? `"${name}", ${FONT_DEFAULT}` : '');
+    });
+
+    on(fontFile, 'change', async () => {
+      const file = fontFile.files && fontFile.files[0];
+      fontFile.value = ''; // re-picking the same file must fire change again
+      if (!file) { sync(); return; }
+      if (!/\.(ttf|otf|woff2?)$/i.test(file.name)) {
+        toast('Pick a .ttf, .otf, .woff or .woff2 file.', true);
+        sync();
+        return;
+      }
+      if (file.size > 10 << 20) {
+        toast('That font is over 10 MB — pick a smaller one.', true);
+        sync();
+        return;
+      }
+      try {
+        const bytes = await file.arrayBuffer();
+        await registerUploadedFont(bytes); // rejects on undecodable input
+        await storeUploadedFont({ name: file.name, bytes });
+        setFont(FONT_UPLOADED_STACK);
+        ensureUploadedOption(file.name);
+        toast(`Font ${file.name} uploaded`);
+      } catch {
+        toast('That file does not decode as a font.', true);
+      }
+      sync();
+    });
+    on(fontFile, 'cancel', () => sync()); // dialog dismissed — undo "Upload…"
+
+    on(fontRemove, 'click', async () => {
+      await deleteUploadedFont().catch(() => {});
+      if ((localStorage.getItem(LS.font) || '') === FONT_UPLOADED_STACK) setFont('');
+      const opt = [...fontSel.options].find((o) => o.value === FONT_UPLOADED_STACK);
+      if (opt) opt.remove();
+      fontRemove.hidden = true;
+      sync();
+      toast('Uploaded font removed');
+    });
+  }
+
   /* -------- profile picture */
   const preview = m.q('.avatar-preview');
   const uploadBtn = m.q('.avatar-upload');
@@ -3641,6 +3773,92 @@ function currentZoom() {
   return clampZoom(parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--zoom')) || 1);
 }
 
+/* -------- UI font (device-local): swaps the --font-sans token the whole
+   interface derives from. Stored as a full CSS stack; absent = the built-in
+   default. Every curated stack ends in a generic family, so a machine that
+   lacks the face degrades to something sane rather than to nothing. */
+
+// Mirrors the stylesheet's --font-sans so custom picks can fall back to it.
+const FONT_DEFAULT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif';
+
+// name: shown in the select. probe: the concrete face document.fonts.check
+// tests for (entries without one are always offered). stack: what --font-sans
+// becomes; '' means the default token (and clears the stored key).
+const FONTS = [
+  { name: 'System', stack: '' },
+  { name: 'Inter', probe: 'Inter', stack: 'Inter, ' + FONT_DEFAULT },
+  { name: 'SF Pro', probe: 'SF Pro Text', stack: '-apple-system, "SF Pro Text", system-ui, sans-serif' },
+  { name: 'Helvetica', probe: 'Helvetica', stack: '"Helvetica Neue", Helvetica, Arial, sans-serif' },
+  { name: 'Segoe UI', probe: 'Segoe UI', stack: '"Segoe UI", system-ui, sans-serif' },
+  { name: 'Roboto', probe: 'Roboto', stack: 'Roboto, "Noto Sans", sans-serif' },
+  { name: 'Ubuntu', probe: 'Ubuntu', stack: 'Ubuntu, "Noto Sans", sans-serif' },
+  { name: 'Cantarell', probe: 'Cantarell', stack: 'Cantarell, "Noto Sans", sans-serif' },
+  { name: 'Noto Sans', probe: 'Noto Sans', stack: '"Noto Sans", sans-serif' },
+  { name: 'Georgia', probe: 'Georgia', stack: 'Georgia, "Times New Roman", serif' },
+  { name: 'Mono', stack: 'ui-monospace, "JetBrains Mono", Iosevka, Menlo, Consolas, monospace' },
+];
+
+function applyFont(stack) {
+  if (stack) document.documentElement.style.setProperty('--font-sans', stack);
+  else document.documentElement.style.removeProperty('--font-sans');
+}
+
+function setFont(stack) {
+  applyFont(stack);
+  if (stack) localStorage.setItem(LS.font, stack);
+  else localStorage.removeItem(LS.font);
+}
+
+/* -------- uploaded font (device-local). The bytes live in IndexedDB — the
+   one thing localStorage cannot hold — as a single record; the face registers
+   under a fixed family name that the stored --font-sans stack references. A
+   FontFace built from a buffer never fetches, so the same-origin CSP is not
+   involved. */
+
+const FONT_UPLOADED_FAMILY = 'slock-custom';
+const FONT_UPLOADED_STACK = `"${FONT_UPLOADED_FAMILY}", ${FONT_DEFAULT}`;
+
+// One db, one store, one key. Each op opens and closes its own connection —
+// at this frequency (profile edits and boot) pooling would be vanity.
+function fontStoreOp(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open('slock', 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('fonts');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const req = fn(db.transaction('fonts', mode).objectStore('fonts'));
+      req.onsuccess = () => { db.close(); resolve(req.result); };
+      req.onerror = () => { db.close(); reject(req.error); };
+    };
+  });
+}
+
+const storeUploadedFont = (rec) => fontStoreOp('readwrite', (s) => s.put(rec, 'custom'));
+const loadUploadedFont = () => fontStoreOp('readonly', (s) => s.get('custom'));
+const deleteUploadedFont = () => fontStoreOp('readwrite', (s) => s.delete('custom'));
+
+// registerUploadedFont makes the bytes usable as FONT_UPLOADED_FAMILY,
+// replacing any face a previous upload registered this session. Rejects on
+// undecodable input, which is the corrupt-file signal.
+async function registerUploadedFont(bytes) {
+  const face = new FontFace(FONT_UPLOADED_FAMILY, bytes);
+  await face.load();
+  document.fonts.forEach((f) => {
+    if (f.family.replace(/^"|"$/g, '') === FONT_UPLOADED_FAMILY) document.fonts.delete(f);
+  });
+  document.fonts.add(face);
+}
+
+// Boot companion to applyFont: fire-and-forget, because until the face
+// registers the stack's fallbacks render and then the page reflows once.
+async function restoreUploadedFont() {
+  try {
+    const rec = await loadUploadedFont();
+    if (rec && rec.bytes) await registerUploadedFont(rec.bytes);
+  } catch { /* nothing stored, or IDB unavailable — fallbacks cover it */ }
+}
+
 /* -------- sidebar width (device-local, desktop only): drag the inner edge;
    double-click the handle to reset to the stylesheet default */
 
@@ -4252,6 +4470,8 @@ async function boot() {
   applyDensity(localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy');
   applySidebarWidth(parseInt(localStorage.getItem(LS.sidebarW), 10) || 0);
   applyZoom(parseFloat(localStorage.getItem(LS.zoom)) || 1);
+  applyFont(localStorage.getItem(LS.font) || '');
+  restoreUploadedFont();
   // On "system", an OS theme flip swaps which custom-colour slot applies.
   on(matchMedia('(prefers-color-scheme: dark)'), 'change', () => applyColors());
 

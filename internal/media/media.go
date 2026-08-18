@@ -33,7 +33,10 @@ const (
 const (
 	DisplayMaxEdge = 1600
 	ThumbMaxEdge   = 480
-	JPEGQuality    = 82
+	// Derived variants only — the original is always stored untouched, and the
+	// lightbox swaps to it on zoom. 90 keeps the fit-view crisp without the
+	// derived files ballooning.
+	JPEGQuality = 90
 )
 
 // maxPixels caps the decoded size of an image, so a small file that expands

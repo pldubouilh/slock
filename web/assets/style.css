@@ -1045,6 +1045,14 @@ body.density-compact .msg--compact .msg-head { display: none; }
   transition: border-color var(--t-fast) var(--ease);
 }
 .att-img:hover .att-img-el { border-color: var(--border-strong); }
+/* Same oversized-box story as the background: the focus ring must trace the
+   image, not the button, or Esc-ing out of the lightbox draws a ring wider
+   than the picture. */
+.att-img:focus-visible { outline: none; }
+.att-img:focus-visible .att-img-el {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .att-file {
   position: relative;
@@ -1971,6 +1979,21 @@ input[type="checkbox"] {
   font-variant-numeric: tabular-nums;
 }
 .zoom-val:hover { color: var(--accent); }
+
+.font-ctl { display: inline-flex; align-items: center; gap: var(--sp-2); }
+.font-select,
+.font-custom {
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-s);
+  background: var(--bg-1);
+  color: var(--text-1);
+  font-size: var(--fs-s);
+}
+.font-select { max-width: 170px; }
+.font-custom { width: 130px; }
+.font-remove { font-size: var(--fs-s); color: var(--text-3); }
+.font-remove:hover { color: var(--danger); text-decoration: underline; }
 
 /* admin: workspace settings block, above the people table */
 .ws-form {
