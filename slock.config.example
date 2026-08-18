@@ -1,0 +1,37 @@
+### slock configuration — copy this file to `slock.config` and edit.
+
+# Postgres connection string. The docker-compose default points at the bundled `db` service and needs no change.
+DATABASE_URL=postgres://slock:slock@db:5432/slock?sslmode=disable
+
+# Network
+# Public origin, exactly as browsers reach it. Used to build password-reset links and — when it is https — to mark session cookies Secure.
+BASE_URL=http://localhost:8080
+
+# Address slock listens on, inside its own process/container.
+ADDR=:8080
+
+# Storage & sessions, where uploaded attachments live (a directory; created if missing).
+DATA_DIR=./data
+
+# Per-file upload limit, in megabytes.
+MAX_UPLOAD_MB=50
+
+# How long a sign-in lasts before it must be renewed, in days.
+SESSION_TTL_DAYS=30
+
+# First-boot admin
+# Created once, only when the database has no users. Leave the password blank to have slock generate one and print it to the log
+BOOTSTRAP_ADMIN_EMAIL=admin@localhost
+BOOTSTRAP_ADMIN_NAME=Admin
+BOOTSTRAP_ADMIN_PASSWORD=
+
+# Web Push (notifications)
+# Push needs a VAPID keypair. Leave the keys blank: slock mints a pair on first boot and appends it to this file (see below).
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:admin@localhost
+
+# Email (password resets, welcome mail) - With no SendGrid key, mail is written to the server log instead of sent.
+SENDGRID_API_KEY=
+MAIL_FROM=
+MAIL_FROM_NAME=slock

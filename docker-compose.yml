@@ -1,0 +1,39 @@
+# slock — run with: docker compose up --build
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: slock
+      # The database is only reachable on the private compose network
+      POSTGRES_PASSWORD: slock
+      POSTGRES_DB: slock
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slock -d slock"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  slock:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    environment:
+      SLOCK_CONFIG: /cfg/slock.config
+    volumes:
+      - attachments:/data
+      - ./slock.config:/cfg/slock.config
+    ports:
+      - "${BIND_ADDR:-127.0.0.1}:8080:8080"
+
+volumes:
+  db-data:
+  attachments:

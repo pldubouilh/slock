@@ -1,0 +1,724 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>slock</title>
+  <meta name="description" content="slock — a deliberately lightweight team messenger">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f6f8">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/favicon-64.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body class="side-left">
+
+<div id="app">
+
+  <!-- ================= sidebar ================= -->
+  <nav id="sidebar" aria-label="Channels and direct messages">
+    <div class="side-head">
+      <div class="wordmark">
+        <svg class="logo workspace-logo" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true">
+          <rect x="1" y="1" width="22" height="22" rx="6.5"/>
+          <path d="M13.9 3.4 6.4 12.6h4.2l-1.4 8 8.2-10h-4.6l1.1-7.2Z"/>
+        </svg>
+        <img id="workspace-icon" alt="" hidden>
+        <span id="workspace-name">slock</span>
+      </div>
+      <button id="search-trigger" type="button" aria-label="Search" title="Search (⌘K)">
+        <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 4.3 4.3"/></svg>
+        <kbd class="kbd">⌘K</kbd>
+      </button>
+    </div>
+
+    <div class="side-scroll">
+      <section class="side-sec">
+        <div class="side-sec-head">
+          <h2>Channels</h2>
+          <button id="new-channel-btn" class="iconbtn" type="button" aria-label="New channel" title="New channel">
+            <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>
+          </button>
+        </div>
+        <ul id="channel-list" class="side-list"></ul>
+      </section>
+
+      <section class="side-sec">
+        <div class="side-sec-head">
+          <h2>Direct messages</h2>
+          <button id="new-dm-btn" class="iconbtn" type="button" aria-label="New direct message" title="New direct message (⌘⇧K)">
+            <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>
+          </button>
+        </div>
+        <ul id="dm-list" class="side-list"></ul>
+      </section>
+    </div>
+
+    <div class="side-foot">
+      <div id="me-menu" role="menu" aria-label="Account" hidden>
+        <button id="profile-btn" type="button" role="menuitem">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="6.8" r="3.2"/><path d="M4 16.8c0-3 2.7-4.8 6-4.8s6 1.8 6 4.8"/></svg>
+          <span>Profile</span>
+        </button>
+        <button id="notifications-btn" type="button" role="menuitem">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3.6-1.5 4.9-1.5 4.9h12s-1.5-1.3-1.5-4.9A4.5 4.5 0 0 0 10 3Z"/><path d="M8.3 15.4a1.8 1.8 0 0 0 3.4 0"/></svg>
+          <span>Notifications</span>
+        </button>
+        <button id="theme-btn" type="button" role="menuitem">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 12.2A7 7 0 0 1 7.8 3.5a7 7 0 1 0 8.7 8.7Z"/></svg>
+          <span>Theme</span>
+        </button>
+        <button id="admin-btn" type="button" role="menuitem">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8 4 5v5c0 4 2.7 6.3 6 7.2 3.3-.9 6-3.2 6-7.2V5l-6-2.2Z"/></svg>
+          <span>Admin</span>
+        </button>
+        <hr class="menu-sep">
+        <button id="logout-btn" type="button" role="menuitem" class="menu-danger">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3.5H5A1.5 1.5 0 0 0 3.5 5v10A1.5 1.5 0 0 0 5 16.5h3"/><path d="M13 6.5 16.5 10 13 13.5"/><path d="M16.5 10H8"/></svg>
+          <span>Sign out</span>
+        </button>
+      </div>
+      <button id="me-chip" type="button" aria-haspopup="menu" aria-controls="me-menu">
+        <span id="me-avatar" class="avatar" aria-hidden="true">
+          <span class="avatar-initials"></span>
+          <img class="avatar-img" alt="" hidden>
+        </span>
+        <span id="me-name"></span>
+        <svg class="ic chip-caret" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 12 4-4 4 4"/></svg>
+      </button>
+    </div>
+    <div id="side-resize" aria-hidden="true"></div>
+  </nav>
+
+  <!-- ================= main column ================= -->
+  <main id="main">
+    <header id="channel-header">
+      <button id="nav-toggle" class="iconbtn" type="button" aria-label="Open channel list">
+        <svg class="ic" viewBox="0 0 20 20" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"/></svg>
+      </button>
+      <div class="header-titles">
+        <svg id="title-lock" class="ic" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-label="Private channel" hidden><rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/></svg>
+        <h1 id="channel-title"></h1>
+        <p id="channel-topic"></p>
+      </div>
+      <div id="channel-actions">
+        <button id="join-btn" class="btn btn--primary btn--sm" type="button" hidden>Join channel</button>
+        <button id="members-btn" class="iconbtn" type="button" aria-label="Members" title="Members">
+          <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="7" r="3"/><path d="M2.5 16.5c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/><path d="M13 4.4a3 3 0 0 1 0 5.2"/><path d="M14.6 12.3c1.8.7 2.9 2.1 2.9 4.2"/></svg>
+        </button>
+        <button id="mute-btn" class="iconbtn" type="button" aria-label="Mute channel" title="Mute channel">
+          <svg class="ic bell-plain" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3.6-1.5 4.9-1.5 4.9h12s-1.5-1.3-1.5-4.9A4.5 4.5 0 0 0 10 3Z"/><path d="M8.3 15.4a1.8 1.8 0 0 0 3.4 0"/></svg>
+          <svg class="ic bell-slash" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M10 3a4.5 4.5 0 0 0-4.5 4.5c0 3.6-1.5 4.9-1.5 4.9h12s-1.5-1.3-1.5-4.9A4.5 4.5 0 0 0 10 3Z"/><path d="M8.3 15.4a1.8 1.8 0 0 0 3.4 0"/><path d="m4 3.5 12.5 13"/></svg>
+        </button>
+        <button id="files-btn" class="iconbtn" type="button" aria-label="Attachments" title="Attachments">
+          <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15.2 9.3-5.3 5.3a3.4 3.4 0 0 1-4.8-4.8l5.8-5.8a2.3 2.3 0 0 1 3.2 3.2l-5.7 5.7a1.1 1.1 0 0 1-1.6-1.6l5.2-5.2"/></svg>
+        </button>
+        <button id="info-btn" class="iconbtn" type="button" aria-label="Channel details" title="Channel details">
+          <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M10 9.2v4.3"/><path d="M10 6.3h.01"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div id="message-scroll">
+      <div id="message-loader" hidden>
+        <span class="spinner" aria-hidden="true"></span>
+        <span>Loading older messages…</span>
+      </div>
+      <ol id="message-list"></ol>
+    </div>
+
+    <div class="composer-area">
+      <button id="jump-latest" type="button" hidden>
+        <svg class="ic" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v11"/><path d="m5.5 10.5 4.5 4.5 4.5-4.5"/></svg>
+        <span>Jump to latest</span>
+      </button>
+      <div id="typing-indicator" aria-live="polite"></div>
+      <form id="composer">
+        <div id="composer-mode" hidden>
+          <svg class="ic" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.8 3.7a1.8 1.8 0 0 1 2.5 2.5l-8.5 8.6-3.4.9.9-3.4 8.5-8.6Z"/></svg>
+          <span class="composer-mode-label"></span>
+          <button type="button" id="composer-cancel">Cancel</button>
+        </div>
+        <div id="attachment-tray" hidden></div>
+        <div class="composer-box">
+          <label class="visually-hidden" for="composer-input">Message</label>
+          <textarea id="composer-input" rows="1" placeholder="Write a message…" enterkeyhint="send" autocomplete="off"></textarea>
+          <div class="composer-bar">
+            <button type="button" id="attach-btn" class="iconbtn" aria-label="Attach files" title="Attach files">
+              <svg class="ic" viewBox="0 0 20 20" width="25" height="25" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m14.8 9.2-5.3 5.3a2.6 2.6 0 0 1-3.7-3.7l6-6a1.8 1.8 0 0 1 2.6 2.6l-6 6a.9.9 0 0 1-1.3-1.3l5.3-5.2"/></svg>
+            </button>
+            <span class="composer-flex"></span>
+            <button type="submit" id="send-btn" aria-label="Send message" title="Send (Enter)">
+              <svg class="ic" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 3 3.4 8.6l5.3 2.7 2.7 5.3L17 3Z"/><path d="m8.7 11.3 3.2-3.2"/></svg>
+            </button>
+          </div>
+        </div>
+        <input type="file" id="file-input" multiple hidden>
+      </form>
+    </div>
+  </main>
+
+</div><!-- /#app -->
+
+<div class="nav-backdrop" aria-hidden="true"></div>
+
+<!-- ================= palette (Ctrl/⌘+K) ================= -->
+<div id="palette" role="dialog" aria-modal="true" aria-label="Search and jump" hidden>
+  <div class="pal-panel">
+    <div class="pal-input-row">
+      <svg class="ic" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 4.3 4.3"/></svg>
+      <input id="palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" placeholder="Jump to a channel or person, or search…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <kbd class="kbd">esc</kbd>
+    </div>
+    <p id="palette-hint">Refine with <code>from:@someone</code> or <code>in:#channel</code></p>
+    <ul id="palette-results" role="listbox" aria-label="Results"></ul>
+    <div id="palette-empty" hidden>Nothing matches. Try fewer words, or a filter like <code>in:#general</code>.</div>
+  </div>
+</div>
+
+<!-- ================= lightbox ================= -->
+<div id="lightbox" role="dialog" aria-modal="true" aria-label="Image viewer" hidden>
+  <button id="lightbox-close" type="button" aria-label="Close image">
+    <svg class="ic" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+  </button>
+  <button id="lightbox-prev" class="lightbox-step" type="button" aria-label="Previous image" hidden>
+    <svg class="ic" viewBox="0 0 20 20" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12.5 4.5-5.5 5.5 5.5 5.5"/></svg>
+  </button>
+  <button id="lightbox-next" class="lightbox-step" type="button" aria-label="Next image" hidden>
+    <svg class="ic" viewBox="0 0 20 20" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7.5 4.5 5.5 5.5-5.5 5.5"/></svg>
+  </button>
+  <figure class="lightbox-fig">
+    <img id="lightbox-img" alt="">
+    <figcaption class="lightbox-bar">
+      <span id="lightbox-caption"></span>
+      <a id="lightbox-download" class="lightbox-dl" download>
+        <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v9"/><path d="m6.5 8.5 3.5 3.5 3.5-3.5"/><path d="M3.5 16.5h13"/></svg>
+        <span>Download</span>
+      </a>
+    </figcaption>
+  </figure>
+</div>
+
+<div id="modal-root"></div>
+
+<div id="toasts" role="status" aria-live="polite"></div>
+
+<div id="connection-banner" role="status" aria-live="polite" hidden>
+  <span class="spinner" aria-hidden="true"></span>
+  <span>Reconnecting…</span>
+</div>
+
+<!-- ================= templates: messages ================= -->
+
+<template id="tpl-message">
+  <li class="msg" tabindex="-1">
+    <span class="msg-avatar avatar" aria-hidden="true">
+      <span class="avatar-initials"></span>
+      <img class="avatar-img" alt="" hidden>
+    </span>
+    <div class="msg-content">
+      <div class="msg-head">
+        <span class="msg-author"></span>
+        <time class="msg-time"></time>
+        <span class="msg-edited" hidden>(edited)</span>
+      </div>
+      <div class="msg-body"></div>
+      <div class="msg-attachments"></div>
+      <div class="msg-reactions"></div>
+    </div>
+    <div class="msg-actions" role="toolbar" aria-label="Message actions">
+      <button type="button" class="iconbtn msg-react" aria-label="Add reaction" title="Add reaction">
+        <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="11" r="6"/><path d="M6.7 12.6s.8 1.3 2.3 1.3 2.3-1.3 2.3-1.3"/><path d="M7.2 9.4h.01M10.8 9.4h.01"/><path d="M15.5 2.2v4.6M13.2 4.5h4.6"/></svg>
+      </button>
+      <button type="button" class="iconbtn msg-reply" aria-label="Quote in reply" title="Quote in reply">
+        <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 4 3.5 8.5 8 13"/><path d="M3.5 8.5H12a4.5 4.5 0 0 1 4.5 4.5v3"/></svg>
+      </button>
+      <button type="button" class="iconbtn msg-edit" aria-label="Edit message" title="Edit">
+        <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.8 3.7a1.8 1.8 0 0 1 2.5 2.5l-8.5 8.6-3.4.9.9-3.4 8.5-8.6Z"/></svg>
+      </button>
+      <button type="button" class="iconbtn msg-copy" aria-label="Copy text" title="Copy text">
+        <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7.5" y="7.5" width="9" height="9" rx="1.5"/><path d="M12.5 7.5V5A1.5 1.5 0 0 0 11 3.5H5A1.5 1.5 0 0 0 3.5 5v6A1.5 1.5 0 0 0 5 12.5h2.5"/></svg>
+      </button>
+      <button type="button" class="iconbtn msg-delete" aria-label="Delete message" title="Delete">
+        <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13"/><path d="M8 5.5V4.2A1.2 1.2 0 0 1 9.2 3h1.6A1.2 1.2 0 0 1 12 4.2v1.3"/><path d="m5.5 5.5.7 10.3A1.5 1.5 0 0 0 7.7 17.2h4.6a1.5 1.5 0 0 0 1.5-1.4l.7-10.3"/></svg>
+      </button>
+    </div>
+  </li>
+</template>
+
+<template id="tpl-day-divider">
+  <li class="day-divider" aria-hidden="true">
+    <span class="day-divider-label"></span>
+  </li>
+</template>
+
+<template id="tpl-attachment-image">
+  <button type="button" class="att-img">
+    <img class="att-img-el" alt="" loading="lazy">
+  </button>
+</template>
+
+<template id="tpl-attachment-file">
+  <div class="att-file">
+    <svg class="ic att-file-icon" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2.5H6A1.5 1.5 0 0 0 4.5 4v12A1.5 1.5 0 0 0 6 17.5h8a1.5 1.5 0 0 0 1.5-1.5V6.5l-4-4Z"/><path d="M11.5 2.5v4h4"/></svg>
+    <span class="att-file-info">
+      <span class="att-file-name"></span>
+      <span class="att-file-meta"></span>
+    </span>
+    <svg class="ic att-file-dl" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3v9"/><path d="m6.5 8.5 3.5 3.5 3.5-3.5"/><path d="M3.5 16.5h13"/></svg>
+    <a class="att-file-link" download><span class="visually-hidden">Download file</span></a>
+  </div>
+</template>
+
+<template id="tpl-reaction">
+  <button type="button" class="reaction">
+    <span class="reaction-emoji"></span>
+    <span class="reaction-count"></span>
+  </button>
+</template>
+
+<template id="tpl-tray-item">
+  <div class="tray-item">
+    <svg class="ic" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2.5H6A1.5 1.5 0 0 0 4.5 4v12A1.5 1.5 0 0 0 6 17.5h8a1.5 1.5 0 0 0 1.5-1.5V6.5l-4-4Z"/><path d="M11.5 2.5v4h4"/></svg>
+    <span class="tray-item-name"></span>
+    <progress class="tray-item-progress" max="100" value="0"></progress>
+    <button type="button" class="iconbtn tray-item-remove" aria-label="Remove attachment" title="Remove">
+      <svg class="ic" viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+    </button>
+  </div>
+</template>
+
+<!-- ================= templates: sidebar rows ================= -->
+
+<template id="tpl-channel-item">
+  <li class="chan">
+    <button type="button" class="chan-btn">
+      <svg class="ic chan-icon chan-hash" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.7 3.5 6.2 16.5M13.8 3.5l-1.5 13M4 7.3h13M3 12.7h13"/></svg>
+      <svg class="ic chan-icon chan-lock" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/></svg>
+      <span class="chan-name"></span>
+      <span class="chan-badge" hidden></span>
+    </button>
+  </li>
+</template>
+
+<template id="tpl-dm-item">
+  <li class="dm">
+    <button type="button" class="dm-btn">
+      <span class="dm-avatar-wrap">
+        <span class="dm-avatar avatar" aria-hidden="true">
+          <span class="avatar-initials"></span>
+          <img class="avatar-img" alt="" hidden>
+        </span>
+        <span class="dm-presence" aria-hidden="true"></span>
+      </span>
+      <span class="dm-name"></span>
+      <span class="dm-badge" hidden></span>
+    </button>
+  </li>
+</template>
+
+<!-- ================= templates: palette ================= -->
+
+<template id="tpl-palette-item">
+  <li class="pal-item" role="option" aria-selected="false">
+    <span class="pal-item-icon" aria-hidden="true"></span>
+    <span class="pal-item-text">
+      <span class="pal-item-title"></span>
+      <span class="pal-item-sub"></span>
+    </span>
+  </li>
+</template>
+
+<template id="tpl-search-result">
+  <li class="pal-item pal-result" role="option" aria-selected="false">
+    <span class="res-meta">
+      <span class="res-channel"></span>
+      <span class="res-author"></span>
+      <time class="res-time"></time>
+    </span>
+    <span class="res-snippet"></span>
+  </li>
+</template>
+
+<!-- ================= templates: misc ================= -->
+
+<template id="tpl-toast">
+  <div class="toast">
+    <span class="toast-text"></span>
+  </div>
+</template>
+
+<template id="tpl-member-row">
+  <li class="member">
+    <span class="member-avatar avatar" aria-hidden="true">
+      <span class="avatar-initials"></span>
+      <img class="avatar-img" alt="" hidden>
+    </span>
+    <span class="member-text">
+      <span class="member-name"></span>
+      <span class="member-meta"></span>
+    </span>
+    <button type="button" class="iconbtn member-remove" aria-label="Remove" title="Remove">
+      <svg class="ic" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+    </button>
+  </li>
+</template>
+
+<!-- ================= templates: dialogs ================= -->
+
+<template id="tpl-modal-new-channel">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal" role="dialog" aria-modal="true" aria-label="New channel">
+      <header class="modal-head">
+        <h2 class="modal-title">New channel</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <form class="mform">
+        <label class="field">
+          <span class="field-label">Name</span>
+          <input name="name" required maxlength="40" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. design">
+        </label>
+        <label class="field">
+          <span class="field-label">Topic <em>optional</em></span>
+          <input name="topic" maxlength="250" autocomplete="off" placeholder="What is this channel about?">
+        </label>
+        <label class="check">
+          <input type="checkbox" name="is_private">
+          <span>Private — only invited people can see it</span>
+        </label>
+        <p class="mform-error" role="alert"></p>
+        <footer class="modal-foot">
+          <button type="submit" class="btn btn--primary mform-submit">Create channel</button>
+        </footer>
+      </form>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-modal-new-dm">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal" role="dialog" aria-modal="true" aria-label="New direct message">
+      <header class="modal-head">
+        <h2 class="modal-title">New message</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <input class="dm-picker-input" type="search" placeholder="Search people…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search people">
+        <ul class="dm-picker-list picker-list"></ul>
+      </div>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-modal-members">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal" role="dialog" aria-modal="true" aria-label="Members">
+      <header class="modal-head">
+        <h2 class="modal-title members-title">Members</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <ul class="members-list picker-list"></ul>
+        <div class="member-add">
+          <h3 class="field-label">Add people</h3>
+          <input class="member-add-input" type="search" placeholder="Search people…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search people to add">
+          <ul class="member-add-list picker-list"></ul>
+        </div>
+      </div>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-modal-files">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal" role="dialog" aria-modal="true" aria-label="Attachments">
+      <header class="modal-head">
+        <h2 class="modal-title files-title">Attachments</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <ul class="files-list"></ul>
+        <p class="files-empty" hidden>No attachments here yet.</p>
+        <button type="button" class="files-more" hidden>Show older</button>
+      </div>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-file-row">
+  <li class="frow">
+    <span class="frow-thumb">
+      <img class="frow-img" alt="" hidden>
+      <svg class="ic frow-icon" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11.5 2.5H6A1.5 1.5 0 0 0 4.5 4v12A1.5 1.5 0 0 0 6 17.5h8a1.5 1.5 0 0 0 1.5-1.5V6.5l-4-4Z"/><path d="M11.5 2.5v4h4"/></svg>
+    </span>
+    <div class="frow-text">
+      <a class="frow-name" target="_blank" rel="noopener"></a>
+      <span class="frow-meta"></span>
+    </div>
+  </li>
+</template>
+
+<template id="tpl-modal-profile">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal" role="dialog" aria-modal="true" aria-label="Profile">
+      <header class="modal-head">
+        <h2 class="modal-title">Profile</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <form class="mform">
+        <div class="avatar-row">
+          <span class="avatar-preview avatar" aria-hidden="true">
+            <span class="avatar-initials"></span>
+            <img class="avatar-img" alt="" hidden>
+          </span>
+          <div class="avatar-row-actions">
+            <button type="button" class="btn btn--sm avatar-upload">Upload picture</button>
+            <button type="button" class="avatar-remove" hidden>Remove picture</button>
+          </div>
+          <input type="file" accept="image/*" class="avatar-file" hidden>
+        </div>
+        <label class="field">
+          <span class="field-label">Display name</span>
+          <input name="display_name" required maxlength="60" autocomplete="name">
+        </label>
+        <label class="field">
+          <span class="field-label">Status <em>optional</em></span>
+          <input name="status_text" maxlength="100" autocomplete="off" placeholder="e.g. out until 3pm">
+        </label>
+        <div class="field">
+          <span class="field-label" id="swatches-label">Avatar colour</span>
+          <div class="color-swatches" role="radiogroup" aria-labelledby="swatches-label"></div>
+        </div>
+        <div class="field">
+          <span class="field-label" id="combo-label">Sidebar &amp; chat colours <em class="combo-note">this device only</em></span>
+          <div class="combo-swatches" role="group" aria-labelledby="combo-label"></div>
+          <div class="combo-custom">
+            <label class="combo-pick"><input type="color" class="combo-sidebar"><span>Sidebar</span></label>
+            <label class="combo-pick"><input type="color" class="combo-chat"><span>Chat</span></label>
+            <button type="button" class="combo-reset" title="Back to the default (Aubergine in light, Midnight in dark)" hidden>Reset</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="field-label">Display <em>this device only</em></span>
+          <div class="disp-row">
+            <span class="disp-label">Messages</span>
+            <div class="seg" data-setting="density" role="group" aria-label="Message density">
+              <button type="button" data-value="cozy">Cozy</button>
+              <button type="button" data-value="compact">Compact</button>
+            </div>
+          </div>
+          <div class="disp-row">
+            <span class="disp-label">Sidebar</span>
+            <div class="seg" data-setting="side" role="group" aria-label="Sidebar side">
+              <button type="button" data-value="left">Left</button>
+              <button type="button" data-value="right">Right</button>
+            </div>
+          </div>
+          <div class="disp-row">
+            <span class="disp-label">Zoom</span>
+            <div class="zoom-ctl">
+              <button type="button" class="zoom-step" data-dir="-1" aria-label="Zoom out">&minus;</button>
+              <input type="range" class="zoom-range" min="0.7" max="1.6" step="0.02" value="1" aria-label="Zoom level">
+              <button type="button" class="zoom-step" data-dir="1" aria-label="Zoom in">+</button>
+              <button type="button" class="zoom-val" title="Reset to 100%">100%</button>
+            </div>
+          </div>
+        </div>
+        <p class="mform-error" role="alert"></p>
+        <footer class="modal-foot">
+          <button type="submit" class="btn btn--primary mform-submit">Save profile</button>
+        </footer>
+        <p class="mform-about"><a href="https://github.com/pldubouilh/slock" target="_blank" rel="noopener">slock</a> · <span class="about-version"></span></p>
+      </form>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-modal-password">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal" role="dialog" aria-modal="true" aria-label="Change password">
+      <header class="modal-head">
+        <h2 class="modal-title">Change password</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <form class="mform">
+        <p class="modal-note">Pick something at least 8 characters long.</p>
+        <label class="field">
+          <span class="field-label">Current password</span>
+          <input name="current_password" type="password" required autocomplete="current-password">
+        </label>
+        <label class="field">
+          <span class="field-label">New password</span>
+          <input name="new_password" type="password" required minlength="8" autocomplete="new-password">
+        </label>
+        <label class="field">
+          <span class="field-label">Confirm new password</span>
+          <input name="confirm_password" type="password" required minlength="8" autocomplete="new-password">
+        </label>
+        <p class="mform-error" role="alert"></p>
+        <footer class="modal-foot">
+          <button type="submit" class="btn btn--primary mform-submit">Update password</button>
+        </footer>
+      </form>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-modal-admin">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal modal--admin" role="dialog" aria-modal="true" aria-label="Admin">
+      <header class="modal-head">
+        <h2 class="modal-title">People</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <form class="ws-form">
+          <h3 class="field-label">Workspace</h3>
+          <div class="ws-row">
+            <img class="ws-icon-preview" alt="" hidden>
+            <input name="workspace_name" maxlength="40" autocomplete="off" aria-label="Workspace name" placeholder="Workspace name">
+            <button type="submit" class="btn btn--primary btn--sm ws-save">Save</button>
+          </div>
+          <div class="ws-icon-actions">
+            <button type="button" class="btn btn--sm ws-icon-upload">Upload icon</button>
+            <button type="button" class="ws-icon-remove" hidden>Remove icon</button>
+            <input type="file" accept="image/*" class="ws-icon-file" hidden>
+          </div>
+          <p class="ws-error" role="alert"></p>
+        </form>
+        <div class="table-scroll">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Email</th>
+                <th scope="col"><span class="visually-hidden">Badges</span></th>
+                <th scope="col">Admin</th>
+                <th scope="col">Active</th>
+                <th scope="col"><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody class="admin-users"></tbody>
+          </table>
+        </div>
+        <form class="admin-new-form">
+          <h3 class="field-label">Add a person</h3>
+          <div class="admin-new-row">
+            <label class="field">
+              <span class="field-label">Email</span>
+              <input name="email" type="email" required autocomplete="off" placeholder="ana@example.com">
+            </label>
+            <label class="field">
+              <span class="field-label">Display name</span>
+              <input name="display_name" required maxlength="60" autocomplete="off" placeholder="Ana">
+            </label>
+          </div>
+          <label class="check">
+            <input type="checkbox" name="is_admin">
+            <span>Make them an admin</span>
+          </label>
+          <p class="mform-error" role="alert"></p>
+          <footer class="modal-foot">
+            <button type="submit" class="btn btn--primary">Create user</button>
+          </footer>
+          <output class="admin-new-result"></output>
+        </form>
+        <section class="tok-section">
+          <h3 class="field-label">API tokens</h3>
+          <p class="tok-hint">Let scripts post messages, e.g. <code>curl -H "Authorization: Bearer slk_…" -d 'build is green' /api/send/releases</code>. The token's name is the author people see.</p>
+          <form class="tok-form">
+            <div class="tok-form-row">
+              <label class="field">
+                <span class="field-label">Name</span>
+                <input name="token_name" maxlength="60" autocomplete="off" placeholder="Deploy bot">
+              </label>
+              <label class="field">
+                <span class="field-label">Scope <em>* for everywhere, or #eng, @bob, #releases</em></span>
+                <input name="token_scope" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="*">
+              </label>
+            </div>
+            <footer class="modal-foot">
+              <button type="submit" class="btn btn--primary btn--sm tok-create">Create token</button>
+            </footer>
+            <p class="tok-error" role="alert"></p>
+            <div class="tok-result" hidden>
+              <p class="tok-result-warn">Copy this token now — it will not be shown again.</p>
+              <div class="tok-result-row">
+                <code class="tok-secret"></code>
+                <button type="button" class="btn btn--sm tok-copy">Copy</button>
+              </div>
+            </div>
+          </form>
+          <ul class="tok-list"></ul>
+        </section>
+      </div>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-admin-row">
+  <tr class="arow">
+    <td class="arow-name"></td>
+    <td class="arow-email"></td>
+    <td class="arow-badges"></td>
+    <td><input type="checkbox" class="arow-admin-toggle" aria-label="Admin"></td>
+    <td><input type="checkbox" class="arow-active-toggle" aria-label="Active"></td>
+    <td><button type="button" class="btn btn--sm arow-reset">Reset password</button></td>
+  </tr>
+</template>
+
+<template id="tpl-token-row">
+  <li class="trow">
+    <span class="trow-name"></span>
+    <span class="trow-scope"></span>
+    <span class="trow-used"></span>
+    <input type="checkbox" class="trow-active-toggle" aria-label="Active">
+    <button type="button" class="iconbtn trow-delete" aria-label="Delete token" title="Delete token">
+      <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 5.5h13"/><path d="M8 5.5V4.2A1.2 1.2 0 0 1 9.2 3h1.6A1.2 1.2 0 0 1 12 4.2v1.3"/><path d="m5.5 5.5.7 10.3A1.5 1.5 0 0 0 7.7 17.2h4.6a1.5 1.5 0 0 0 1.5-1.4l.7-10.3"/></svg>
+    </button>
+  </li>
+</template>
+
+<template id="tpl-modal-confirm">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal modal--confirm" role="alertdialog" aria-modal="true" aria-label="Confirm">
+      <div class="modal-body">
+        <p class="confirm-text"></p>
+      </div>
+      <footer class="modal-foot modal-foot--pad">
+        <button type="button" class="btn confirm-cancel">Cancel</button>
+        <button type="button" class="btn btn--danger confirm-ok">Confirm</button>
+      </footer>
+    </section>
+  </div>
+</template>
+
+</body>
+</html>

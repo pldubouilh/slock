@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sign in · slock</title>
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f6f8">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <!-- Signed-out visitors land here, so this page has to be installable too;
+       start_url is "/" so the installed app still opens the real thing. -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/favicon-64.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/login.js"></script>
+</head>
+<body class="auth-page">
+
+<main class="auth-card">
+  <div class="wordmark wordmark--auth">
+    <svg class="logo workspace-logo" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+      <rect x="1" y="1" width="22" height="22" rx="6.5"/>
+      <path d="M13.9 3.4 6.4 12.6h4.2l-1.4 8 8.2-10h-4.6l1.1-7.2Z"/>
+    </svg>
+    <img id="workspace-icon" alt="" hidden>
+    <span>slock</span>
+  </div>
+
+  <form id="login-form">
+    <h1>Sign in</h1>
+    <p class="auth-sub">Team chat without the bloat.</p>
+    <label class="field">
+      <span class="field-label">Email</span>
+      <input name="email" type="email" required autocomplete="email" autofocus placeholder="you@example.com">
+    </label>
+    <label class="field">
+      <span class="field-label">Password</span>
+      <input name="password" type="password" required autocomplete="current-password">
+    </label>
+    <p id="login-error" class="form-error" role="alert"></p>
+    <button id="login-submit" type="submit" class="btn btn--primary btn--block">Sign in</button>
+    <button id="forgot-link" type="button" class="linkbtn">Forgot password?</button>
+  </form>
+
+  <form id="forgot-form" hidden>
+    <h1>Reset password</h1>
+    <p class="auth-sub">Enter your email and we will send you a reset link.</p>
+    <label class="field">
+      <span class="field-label">Email</span>
+      <input name="email" type="email" required autocomplete="email" placeholder="you@example.com">
+    </label>
+    <p id="forgot-error" class="form-error" role="alert"></p>
+    <p id="forgot-done" class="form-done" role="status" hidden>If that address has an account, a reset link is on its way.</p>
+    <button type="submit" class="btn btn--primary btn--block">Send reset link</button>
+  </form>
+</main>
+
+</body>
+</html>

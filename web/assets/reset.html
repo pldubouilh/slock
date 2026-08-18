@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Choose a new password · slock</title>
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f5f6f8">
+  <link rel="icon" href="/icons/favicon-64.png" type="image/png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/reset.js"></script>
+</head>
+<body class="auth-page">
+
+<main class="auth-card">
+  <div class="wordmark wordmark--auth">
+    <svg class="logo" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+      <rect x="1" y="1" width="22" height="22" rx="6.5"/>
+      <path d="M13.9 3.4 6.4 12.6h4.2l-1.4 8 8.2-10h-4.6l1.1-7.2Z"/>
+    </svg>
+    <span>slock</span>
+  </div>
+
+  <form id="reset-form">
+    <h1>Choose a new password</h1>
+    <p class="auth-sub">At least 8 characters. Make it a good one.</p>
+    <label class="field">
+      <span class="field-label">New password</span>
+      <input name="new_password" type="password" required minlength="8" autocomplete="new-password" autofocus>
+    </label>
+    <label class="field">
+      <span class="field-label">Confirm new password</span>
+      <input name="confirm_password" type="password" required minlength="8" autocomplete="new-password">
+    </label>
+    <p id="reset-error" class="form-error" role="alert"></p>
+    <button type="submit" class="btn btn--primary btn--block">Set password</button>
+  </form>
+</main>
+
+</body>
+</html>
