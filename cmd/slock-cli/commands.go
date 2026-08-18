@@ -122,6 +122,9 @@ func (s *switcher) rebuild(a *App) {
 		if u.ID == a.me.ID {
 			continue
 		}
+		if u.IsBot {
+			continue // bots are posted to, not chatted with
+		}
 		sc := fuzzyScore(needle, u.DisplayName)
 		if sc < 0 {
 			continue

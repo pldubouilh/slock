@@ -14,6 +14,7 @@ type User struct {
 	StatusText   string    `json:"status_text"`
 	IsAdmin      bool      `json:"is_admin"`
 	IsActive     bool      `json:"is_active"`
+	IsBot        bool      `json:"is_bot,omitempty"`
 	MustChangePW bool      `json:"must_change_pw,omitempty"`
 	CreatedAt    time.Time `json:"created_at"`
 	LastSeenAt   time.Time `json:"last_seen_at"`

@@ -1028,21 +1028,23 @@ body.density-compact .msg--compact .msg-head { display: none; }
 }
 .msg-attachments:not(:empty) { margin-top: 6px; }
 
+/* The frame lives on the <img> itself, not the wrapping button: flex sizes
+   the button from the image's width cap before max-height shrinks the image,
+   so a framed button would keep a dead gray strip on the right. */
 .att-img {
   padding: 0;
-  border: 1px solid var(--border);
-  border-radius: var(--r-m);
-  overflow: hidden;
-  background: var(--bg-2);
+  border: 0;
+  background: none;
   cursor: zoom-in;
-  transition: border-color var(--t-fast) var(--ease);
 }
-.att-img:hover { border-color: var(--border-strong); }
 .att-img-el {
   max-height: 340px;
   max-width: min(420px, 100%);
-  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  transition: border-color var(--t-fast) var(--ease);
 }
+.att-img:hover .att-img-el { border-color: var(--border-strong); }
 
 .att-file {
   position: relative;

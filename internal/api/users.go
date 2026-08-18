@@ -21,11 +21,11 @@ const (
 // publicUserColumns is userColumns minus the email and the password flag: what
 // every signed-in user is allowed to see about everyone else.
 const publicUserColumns = `u.id, u.display_name, u.avatar_color, u.status_text,
-	u.is_admin, u.is_active, u.created_at, u.last_seen_at, u.avatar_sha`
+	u.is_admin, u.is_active, u.is_bot, u.created_at, u.last_seen_at, u.avatar_sha`
 
 func scanPublicUserRow(row pgx.Row, u *db.User) error {
 	if err := row.Scan(&u.ID, &u.DisplayName, &u.AvatarColor, &u.StatusText,
-		&u.IsAdmin, &u.IsActive, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA); err != nil {
+		&u.IsAdmin, &u.IsActive, &u.IsBot, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA); err != nil {
 		return err
 	}
 	u.SetAvatarURL()

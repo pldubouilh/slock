@@ -2073,6 +2073,7 @@ function localPaletteEntries(q) {
     }
     for (const u of state.users.values()) {
       if (state.me && u.id === state.me.id) continue;
+      if (u.is_bot) continue; // bots are posted to, not chatted with
       const score = needle ? fuzzyScore(needle, u.display_name) : 0;
       if (score < 0) continue;
       const dm = dmByPeer.get(u.id);
@@ -2602,7 +2603,7 @@ function openNewDMModal() {
     const needle = input ? input.value.trim() : '';
     list.textContent = '';
     const users = [...state.users.values()]
-      .filter((u) => !state.me || u.id !== state.me.id)
+      .filter((u) => (!state.me || u.id !== state.me.id) && !u.is_bot)
       .map((u) => ({ u, score: needle ? fuzzyScore(needle, u.display_name) : 0 }))
       .filter((x) => x.score >= 0)
       .sort((a, b) => b.score - a.score)
@@ -2664,7 +2665,9 @@ async function openMembersModal() {
     const needle = addInput ? addInput.value.trim() : '';
     const memberSet = new Set(members || []);
     const candidates = [...state.users.values()]
-      .filter((u) => !memberSet.has(u.id))
+      // Bots stay out of the picker; a token's bot user is enrolled into a
+      // private channel via the CLI's /slock invite instead.
+      .filter((u) => !memberSet.has(u.id) && !u.is_bot)
       .map((u) => ({ u, score: needle ? fuzzyScore(needle, u.display_name) : 0 }))
       .filter((x) => x.score >= 0)
       .sort((a, b) => b.score - a.score)

@@ -30,15 +30,15 @@ const (
 // userColumnsBare is the same list for INSERT/UPDATE ... RETURNING.
 const (
 	userColumns = `u.id, u.email, u.display_name, u.avatar_color, u.status_text,
-		u.is_admin, u.is_active, u.must_change_pw, u.created_at, u.last_seen_at, u.avatar_sha`
+		u.is_admin, u.is_active, u.is_bot, u.must_change_pw, u.created_at, u.last_seen_at, u.avatar_sha`
 	userColumnsBare = `id, email, display_name, avatar_color, status_text,
-		is_admin, is_active, must_change_pw, created_at, last_seen_at, avatar_sha`
+		is_admin, is_active, is_bot, must_change_pw, created_at, last_seen_at, avatar_sha`
 )
 
 // scanUserRow reads a row selected with userColumns.
 func scanUserRow(row pgx.Row, u *db.User) error {
 	if err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarColor, &u.StatusText,
-		&u.IsAdmin, &u.IsActive, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA); err != nil {
+		&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA); err != nil {
 		return err
 	}
 	u.SetAvatarURL()
@@ -140,7 +140,7 @@ func (s *Server) lookupSession(ctx context.Context, token string) (*db.User, err
 		 FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token_hash = $1`, hashToken(token))
 	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarColor, &u.StatusText,
-		&u.IsAdmin, &u.IsActive, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &expiresAt)
+		&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &expiresAt)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, httpx.ErrUnauthorized
@@ -187,7 +187,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) error {
 		`SELECT `+userColumns+`, u.password_hash FROM users u
 			 WHERE lower(u.email) = lower($1) AND NOT u.is_bot`, in.Email).
 		Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarColor, &u.StatusText,
-			&u.IsAdmin, &u.IsActive, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &hash)
+			&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &hash)
 	u.SetAvatarURL()
 	if err != nil {
 		if !isNoRows(err) {

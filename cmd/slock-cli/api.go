@@ -34,6 +34,7 @@ type User struct {
 	StatusText  string `json:"status_text"`
 	IsAdmin     bool   `json:"is_admin"`
 	IsActive    bool   `json:"is_active"`
+	IsBot       bool   `json:"is_bot"`
 }
 
 type Attachment struct {
