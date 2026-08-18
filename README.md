@@ -10,6 +10,7 @@ A small, fast, self-hosted team chat.
 - Deliberately lean interface with markdown support, attachments, lightweight theming.
 - Functional fuzzy search and channel switcher.
 - Supports bot integration.
+- An IRC inspired terminal client.
 
 <img width="1452" height="879" alt="Image" src="https://github.com/user-attachments/assets/903f4230-a4aa-4dba-9cbf-9ba00b647c50" />
 
