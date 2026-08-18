@@ -17,7 +17,7 @@ services:
       retries: 10
 
   slock:
-    build: .
+    image: ghcr.io/pldubouilh/slock:latest
     restart: unless-stopped
     depends_on:
       db:

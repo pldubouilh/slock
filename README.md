@@ -20,7 +20,7 @@ Start with docker compose to boot slock alongside potgres:
 
 ```sh
 cp slock.config.example slock.config
-docker compose up --build
+docker compose up
 ```
 
 Then open <http://localhost:8080>. On the very first boot slock creates an admin account and prints the password:
@@ -40,7 +40,7 @@ Edit `slock.config` to set `BASE_URL` to the https domain it will be deployed on
 You can now start slock: 
 
 ```sh
-docker compose up -d --build
+docker compose up -d
 ```
 
 slock binds to `127.0.0.1:8080`. Front it with [caddy](https://caddyserver.com/) (or your other) to get https and reverse proxy. Example caddy config: 

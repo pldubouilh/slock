@@ -1,0 +1,68 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the release and upload assets
+  packages: write # push to ghcr.io
+
+jobs:
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: build static binaries
+        run: |
+          set -euo pipefail
+          ldflags="-s -w -X slock/internal/version.override=${GITHUB_REF_NAME}"
+          mkdir -p dist
+          # server: linux only (it runs next to postgres)
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
+              go build -trimpath -ldflags "$ldflags" -o "dist/slock_linux_${arch}" ./cmd/slock
+          done
+          # cli: linux and macos (the TUI is unix-only)
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" \
+              go build -trimpath -ldflags "$ldflags" -o "dist/slock-cli_${target%/*}_${target#*/}" ./cmd/slock-cli
+          done
+          (cd dist && sha256sum * > SHA256SUMS)
+
+      - name: create release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Re-running the workflow for an existing release just refreshes assets.
+          gh release create "$GITHUB_REF_NAME" --generate-notes dist/* \
+            || gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # VERSION is passed explicitly: buildx contexts don't carry the git
+      # binary/history the Dockerfile would otherwise stamp from.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
