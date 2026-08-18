@@ -1,4 +1,4 @@
-FROM golang:1.26-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
 
 WORKDIR /src
 RUN apk add --no-cache git
@@ -9,7 +9,8 @@ RUN go mod download
 COPY . .
 
 ARG VERSION=""
-RUN CGO_ENABLED=0 go build -trimpath \
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w -X slock/internal/version.override=${VERSION}" \
     -o /out/slock ./cmd/slock
 
