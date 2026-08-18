@@ -15,6 +15,7 @@ const SHELL = [
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
   '/icons/badge-96.png',
+  '/icons/transparent.png',
   '/icons/favicon-64.png',
   '/icons/apple-touch-icon.png',
 ];
@@ -99,17 +100,19 @@ self.addEventListener('push', (event) => {
   // The icon/badge slots mean different things per platform. Android: `badge`
   // is the small monochrome status-bar glyph (without it: a generic bell) and
   // `icon` renders as a big redundant image on the RIGHT of the notification —
-  // the nice left icon is the installed app's own, so `icon` is omitted there.
-  // Desktop: `icon` IS the main left logo and `badge` goes unused.
+  // the nice left icon is the installed app's own. Omitting `icon` is no good
+  // either: the browser then draws a generated monogram ("S" in a circle) in
+  // that slot, so it gets a fully transparent image instead, which renders as
+  // nothing. Desktop: `icon` IS the main left logo and `badge` goes unused.
   const isAndroid = /Android/i.test(navigator.userAgent);
   const options = {
     body: data.body || '',
     tag: data.tag || undefined,     // coalesce per-channel notifications
     renotify: !!data.tag,           // replacing a tag must still alert the user
     badge: '/icons/badge-96.png',
+    icon: isAndroid ? '/icons/transparent.png' : '/icons/icon-192.png',
     data: { url: data.url || '/' },
   };
-  if (!isAndroid) options.icon = '/icons/icon-192.png';
   event.waitUntil((async () => {
     await self.registration.showNotification(title, options);
     if ('setAppBadge' in navigator && typeof data.badge === 'number') {

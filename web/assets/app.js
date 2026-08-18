@@ -106,6 +106,7 @@ function applyAvatar(el, user) {
   if (url) {
     img.loading = 'lazy';
     img.decoding = 'async';
+    img.onerror = () => { img.hidden = true; };
     if (img.getAttribute('src') !== url) img.src = url; // hash-versioned, stable
     img.hidden = false;
   } else {
