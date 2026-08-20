@@ -190,6 +190,7 @@ const LS = {
   density: 'slock:density',
   sidebarW: 'slock:sidebar-width',
   zoom: 'slock:zoom',
+  closedDMs: 'slock:closed-dms',
   font: 'slock:font',
   lastChannel: 'slock:last-channel',
   drafts: 'slock:drafts',
@@ -338,7 +339,9 @@ function forgetPrivateChannel(channelId) {
 
 function sortedDMs() {
   return [...state.channels.values()]
-    .filter((c) => c.kind === 'dm')
+    // closedDMs = device-locally hidden conversations; a new message or a
+    // deliberate reopen (reopenDM) puts them back.
+    .filter((c) => c.kind === 'dm' && !closedDMs.has(c.id))
     .sort((a, b) => String(b.last_message_at || '').localeCompare(String(a.last_message_at || '')));
 }
 
@@ -438,6 +441,7 @@ function makeMsgEl(m, prev, st) {
   el.dataset.userId = m.user_id;
   if (m.client_id) el.dataset.clientId = m.client_id;
   el.classList.toggle('msg--own', !!own);
+  el.classList.toggle('msg--bot', !!(user && user.is_bot)); // no DM-on-click affordance
   el.classList.toggle('msg--compact', isCompactWith(prev, m, st));
   el.classList.toggle('msg--deleted', !!m.deleted_at);
   el.classList.toggle('msg--pending', !!m.pending);
@@ -1061,6 +1065,8 @@ function renderChannelHeader() {
   if (filesBtn) filesBtn.hidden = !ch; // any readable channel has history
   const infoBtn = byId('info-btn');
   if (infoBtn) infoBtn.hidden = !ch || isDM;
+  const closeBtn = byId('close-dm-btn');
+  if (closeBtn) closeBtn.hidden = !isDM;
 }
 
 /* ============================================================ read state / badges */
@@ -1939,6 +1945,7 @@ function onMessageNew(data) {
     });
   }
   ch.last_message_at = m.created_at;
+  reopenDM(channelId); // a message resurfaces a locally hidden DM
 
   const st = chanState(channelId);
 
@@ -2273,9 +2280,12 @@ function movePaletteActive(delta) {
 // "click a person" affordance: palette, DM picker, message author/avatar.
 async function openDMWith(userId) {
   if (!userId || (state.me && userId === state.me.id)) return;
+  const u = state.users.get(userId);
+  if (u && u.is_bot) return; // bots are posted to, not chatted with
   try {
     const data = await api('/api/dms', { method: 'POST', body: { user_id: userId } });
     mergeChannel(data.channel);
+    reopenDM(data.channel.id); // deliberate open resurfaces a hidden one
     renderSidebar();
     openChannel(data.channel.id);
   } catch { /* toasted */ }
@@ -2747,6 +2757,54 @@ async function openMembersModal() {
   render();
 }
 
+/* -------- close a DM conversation (#close-dm-btn) — purely visual, this
+   device only: the ids live in localStorage, the server never hears about it.
+   A new message in the conversation, or reopening it via the palette,
+   un-closes it. */
+
+let closedDMs = new Set();
+
+function loadClosedDMs() {
+  try {
+    closedDMs = new Set(JSON.parse(localStorage.getItem(LS.closedDMs) || '[]'));
+  } catch {
+    closedDMs = new Set();
+  }
+}
+
+function saveClosedDMs() {
+  if (closedDMs.size) localStorage.setItem(LS.closedDMs, JSON.stringify([...closedDMs]));
+  else localStorage.removeItem(LS.closedDMs);
+}
+
+// A message arrived in it, or the user deliberately reopened it.
+function reopenDM(channelId) {
+  if (closedDMs.delete(channelId)) {
+    saveClosedDMs();
+    renderSidebar();
+  }
+}
+
+async function closeDMConversation() {
+  const ch = state.channels.get(state.currentId);
+  if (!ch || ch.kind !== 'dm') return;
+  const ok = await confirmModal(
+    `Hide the conversation with ${channelDisplayName(ch)} on this device? History is kept — it comes back on the next message.`,
+    'Hide');
+  if (!ok) return;
+  closedDMs.add(ch.id);
+  saveClosedDMs();
+  const next = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
+  if (next) {
+    openChannel(next.id);
+  } else {
+    state.currentId = null;
+    renderSidebar();
+    renderChannelHeader();
+  }
+  toast(`Hid conversation with ${channelDisplayName(ch)}`);
+}
+
 /* -------- channel attachments (#files-btn) */
 
 function makeFileRow(att) {
@@ -2857,7 +2915,7 @@ function openProfileModal() {
     // switch themes to style the other one.
     const theme = effectiveTheme();
     const note = m.q('.combo-note');
-    if (note) note.textContent = `${theme} theme · this device only`;
+    if (note) note.textContent = `${theme} theme`;
     // The stock, un-customised tokens: root is never inline-overridden, so
     // these are the stylesheet values for the active theme.
     const cs = getComputedStyle(document.documentElement);
@@ -3323,9 +3381,12 @@ async function openAdminModal() {
     }
   };
 
-  const renderWs = () => {
+  // force: the activeElement guard protects in-progress typing from live
+  // workspace.update frames — but openModal focuses this very input, so the
+  // initial prefill must ignore it or the field opens empty.
+  const renderWs = (force = false) => {
     const ws = state.workspace;
-    if (wsName && document.activeElement !== wsName) wsName.value = ws.name || '';
+    if (wsName && (force || document.activeElement !== wsName)) wsName.value = ws.name || '';
     if (wsIconPreview) {
       if (ws.icon_url) {
         if (wsIconPreview.getAttribute('src') !== ws.icon_url) wsIconPreview.src = ws.icon_url;
@@ -3337,7 +3398,7 @@ async function openAdminModal() {
     }
     if (wsIconRemove) wsIconRemove.hidden = !ws.icon_url;
   };
-  renderWs();
+  renderWs(true);
 
   on(wsForm, 'submit', async (e) => {
     e.preventDefault();
@@ -4178,6 +4239,7 @@ function wireHeader() {
   on(byId('members-btn'), 'click', openMembersModal);
   on(byId('mute-btn'), 'click', toggleMute);
   on(byId('files-btn'), 'click', openFilesModal);
+  on(byId('close-dm-btn'), 'click', closeDMConversation);
   on(byId('info-btn'), 'click', openChannelInfoModal);
   on(byId('jump-latest'), 'click', () => {
     state.atBottom = true;
@@ -4191,6 +4253,19 @@ function wireHeader() {
 function wireComposer() {
   const form = byId('composer');
   const ta = byId('composer-input');
+
+  // The composer area's height moves for many reasons — the textarea growing
+  // across lines, the edit bar, the attachment tray, the typing line — and
+  // each one shrinks the message pane. When the view was pinned to the newest
+  // message, keep it pinned, so the area visibly extends instead of eating
+  // the last message (or leaving a sliver of scroll).
+  const area = document.querySelector('.composer-area');
+  if (area && 'ResizeObserver' in window) {
+    new ResizeObserver(() => {
+      if (state.atBottom) scrollToBottom();
+    }).observe(area);
+  }
+
   on(form, 'submit', (e) => {
     e.preventDefault();
     submitComposer();
@@ -4470,6 +4545,7 @@ async function boot() {
   applyDensity(localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy');
   applySidebarWidth(parseInt(localStorage.getItem(LS.sidebarW), 10) || 0);
   applyZoom(parseFloat(localStorage.getItem(LS.zoom)) || 1);
+  loadClosedDMs();
   applyFont(localStorage.getItem(LS.font) || '');
   restoreUploadedFont();
   // On "system", an OS theme flip swaps which custom-colour slot applies.

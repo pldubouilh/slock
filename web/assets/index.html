@@ -121,6 +121,9 @@
         <button id="info-btn" class="iconbtn" type="button" aria-label="Channel details" title="Channel details">
           <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M10 9.2v4.3"/><path d="M10 6.3h.01"/></svg>
         </button>
+        <button id="close-dm-btn" class="iconbtn" type="button" aria-label="Close conversation" title="Close conversation" hidden>
+          <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
       </div>
     </header>
 
@@ -510,7 +513,7 @@
           <div class="color-swatches" role="radiogroup" aria-labelledby="swatches-label"></div>
         </div>
         <div class="field">
-          <span class="field-label" id="combo-label">Sidebar &amp; chat colours <em class="combo-note">this device only</em></span>
+          <span class="field-label" id="combo-label">Sidebar &amp; chat colours <em class="combo-note"></em></span>
           <div class="combo-swatches" role="group" aria-labelledby="combo-label"></div>
           <div class="combo-custom">
             <label class="combo-pick"><input type="color" class="combo-sidebar"><span>Sidebar</span></label>
@@ -519,7 +522,7 @@
           </div>
         </div>
         <div class="field">
-          <span class="field-label">Display <em>this device only</em></span>
+          <span class="field-label">Display</span>
           <div class="disp-row">
             <span class="disp-label">Messages</span>
             <div class="seg" data-setting="density" role="group" aria-label="Message density">
@@ -637,7 +640,6 @@
           </table>
         </div>
         <form class="admin-new-form">
-          <h3 class="field-label">Add a person</h3>
           <div class="admin-new-row">
             <label class="field">
               <span class="field-label">Email</span>
@@ -660,7 +662,6 @@
         </form>
         <section class="tok-section">
           <h3 class="field-label">API tokens</h3>
-          <p class="tok-hint">Let scripts post messages, e.g. <code>curl -H "Authorization: Bearer slk_…" -d 'build is green' /api/send/releases</code>. The token's name is the author people see.</p>
           <form class="tok-form">
             <div class="tok-form-row">
               <label class="field">
@@ -668,8 +669,8 @@
                 <input name="token_name" maxlength="60" autocomplete="off" placeholder="Deploy bot">
               </label>
               <label class="field">
-                <span class="field-label">Scope <em>* for everywhere, or #eng, @bob, #releases</em></span>
-                <input name="token_scope" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="*">
+                <span class="field-label">Scope</span>
+                <input name="token_scope" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="* for everywhere, #eng, @bob...">
               </label>
             </div>
             <footer class="modal-foot">

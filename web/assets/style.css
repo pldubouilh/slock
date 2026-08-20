@@ -241,6 +241,11 @@ h1, h2, h3 { font-weight: 700; line-height: 1.25; }
 /* shared bits ------------------------------------------------------------ */
 
 .kbd {
+  /* Flex-centered rather than padding-aligned: glyphs like ⌘ carry odd
+     vertical metrics that sit visibly low in a padded box. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1;
@@ -783,9 +788,11 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   gap: var(--sp-2);
   min-width: 0;
 }
-/* name and avatar open the author's DM — pointer only, no link styling */
+/* name and avatar open the author's DM — pointer only, no link styling.
+   Bots are the exception: nothing to open, so no pointer either. */
 .msg-author { font-weight: 700; font-size: calc(1px + var(--fs-body)); cursor: pointer; }
 .msg-avatar { cursor: pointer; }
+.msg--bot .msg-author, .msg--bot .msg-avatar { cursor: default; }
 .msg-time { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; user-select: none; }
 .msg-edited { font-size: var(--fs-xs); color: var(--text-3); }
 
@@ -1500,13 +1507,17 @@ body.density-compact .msg--compact .msg-head { display: none; }
   cursor: zoom-in;
 }
 
-/* click-to-zoom: natural size, panned by scrolling; auto margins keep a
-   smaller-than-viewport image centred without clipping a larger one */
+/* click-to-zoom: natural size, panned by scrolling. The container stops
+   centring (centred + overflow would make the top/left edge unreachable) and
+   the figure's auto margins take over: they centre BOTH axes while it fits
+   and collapse to 0 when it overflows, so a small landscape image stays in
+   the middle instead of jumping to the top. */
 #lightbox.lightbox--zoomed {
-  display: block;
   overflow: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
 }
-#lightbox.lightbox--zoomed .lightbox-fig { min-height: 100%; width: max-content; margin: auto; }
+#lightbox.lightbox--zoomed .lightbox-fig { margin: auto; }
 #lightbox.lightbox--zoomed #lightbox-img {
   max-width: none;
   max-height: none;
@@ -1649,7 +1660,8 @@ body.density-compact .msg--compact .msg-head { display: none; }
 /* forms */
 .field { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
 .field-label {
-  font-size: var(--fs-s);
+  font-size: var(--fs-m);
+  margin-top: 5px;
   font-weight: 600;
   color: var(--text-2);
   user-select: none;
@@ -1989,6 +2001,7 @@ input[type="checkbox"] {
   background: var(--bg-1);
   color: var(--text-1);
   font-size: var(--fs-s);
+  appearance: none;
 }
 .font-select { max-width: 170px; }
 .font-custom { width: 130px; }

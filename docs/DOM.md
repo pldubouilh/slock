@@ -52,7 +52,11 @@ strings, so the templates are where message/row structure lives.
                             [hidden] when the channel has no topic
       #channel-actions      holds #members-btn, #join-btn, #mute-btn (bell icon,
                       `.bell-plain`/`.bell-slash` toggled by mute state),
-                      #files-btn (channel attachments modal), #info-btn
+                      #files-btn (channel attachments modal), #info-btn,
+                      #close-dm-btn (DMs only: hides the conversation from
+                      the rail on this device — localStorage
+                      ["slock:closed-dms"], purely visual, server untouched;
+                      a new message or reopening via the palette restores it)
     #message-scroll         the scroll container
       #message-loader       "loading older messages" spinner, JS toggles [hidden]
       #message-list         messages go here, oldest first
