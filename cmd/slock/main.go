@@ -38,15 +38,6 @@ func main() {
 		return
 	}
 
-	if len(os.Args) > 1 && os.Args[1] == "keygen" {
-		pub, priv, err := push.GenerateKeys()
-		if err != nil {
-			log.Fatalf("keygen: %v", err)
-		}
-		fmt.Printf("VAPID_PUBLIC_KEY=%s\nVAPID_PRIVATE_KEY=%s\n", pub, priv)
-		return
-	}
-
 	if len(os.Args) > 2 && os.Args[1] == "migrate" && os.Args[2] == "status" {
 		if err := migrateStatus(); err != nil {
 			log.Fatal(err)
@@ -163,11 +154,7 @@ func run() error {
 // reach if our notifications misbehave. RFC 8292 takes a mailto: or an https:
 // URI, and browsers only allow push over https in the first place — so the
 // public origin is both valid and always right, with no knob to keep in sync.
-// VAPID_SUBJECT still overrides it for anyone who wants a specific address.
 func vapidSubject(baseURL string) string {
-	if s := strings.TrimSpace(os.Getenv("VAPID_SUBJECT")); s != "" {
-		return s
-	}
 	if strings.HasPrefix(baseURL, "https://") {
 		return baseURL
 	}
@@ -185,29 +172,8 @@ func vapidSubject(baseURL string) string {
 // every browser subscription is bound to that public key, so a keypair that can
 // drift from the rows — a config that failed to save, a dump restored beside a
 // different file, one pair per instance — silently kills every subscription.
-//
-// VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY still win when set, and are copied into
-// the database, which is how an existing instance ports its identity across.
-// Config is then free to forget them.
+// The database is the only home; there is nothing to configure.
 func resolveVAPIDKeys(ctx context.Context, database *db.DB) (pub, priv string, err error) {
-	envPub, envPriv := os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY")
-	switch {
-	case envPub != "" && envPriv != "":
-		if _, err := database.Pool.Exec(ctx,
-			`INSERT INTO server_keys (name, public_key, private_key) VALUES ('vapid', $1, $2)
-			 ON CONFLICT (name) DO UPDATE SET public_key = EXCLUDED.public_key,
-			                                 private_key = EXCLUDED.private_key`,
-			envPub, envPriv); err != nil {
-			return "", "", err
-		}
-		log.Printf("web push keys taken from the environment and stored")
-		return envPub, envPriv, nil
-	case envPub != "" || envPriv != "":
-		// A half-configured pair is a mistake worth pointing at rather than
-		// papering over — say so, then fall back to the stored pair.
-		log.Printf("only one of VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY is set; ignoring both")
-	}
-
 	err = database.Pool.QueryRow(ctx,
 		`SELECT public_key, private_key FROM server_keys WHERE name = 'vapid'`).Scan(&pub, &priv)
 	if err == nil {

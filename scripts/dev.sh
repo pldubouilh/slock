@@ -47,11 +47,11 @@ export SLOCK_WEB_DIR="${SLOCK_WEB_DIR:-web/assets}"
 export BOOTSTRAP_ADMIN_EMAIL="${BOOTSTRAP_ADMIN_EMAIL:-you@example.com}"
 export BOOTSTRAP_ADMIN_PASSWORD="${BOOTSTRAP_ADMIN_PASSWORD:-devpassword1}"
 
-# Web push keys generate themselves on first boot and are stored here, kept out
-# of the repo's own slock.config so a dev run never touches your deploy config.
-# Delete the file to mint a fresh pair.
-export SLOCK_CONFIG="${SLOCK_CONFIG:-.dev-vapid}"
-export VAPID_SUBJECT="${VAPID_SUBJECT:-mailto:dev@localhost}"
+# Everything above is exported explicitly, so read no config file at all —
+# ./slock.config is written for docker compose (its DATABASE_URL names the `db`
+# service) and has no business leaking into a bare dev run. Push needs nothing:
+# the keypair is generated into the scratch database on first boot.
+export SLOCK_CONFIG="${SLOCK_CONFIG:-/dev/null}"
 
 echo "slock dev"
 echo "  url:      $BASE_URL"

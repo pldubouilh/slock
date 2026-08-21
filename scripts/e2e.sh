@@ -42,17 +42,14 @@ psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres -q \
 BIN="$WORK/slock"
 go build -o "$BIN" ./cmd/slock || exit 1
 
-# Real VAPID keys so the push path is exercised rather than skipped.
-eval "$("$BIN" keygen)"
-export VAPID_PUBLIC_KEY VAPID_PRIVATE_KEY
-
+# Push needs no setup: the server mints its keypair into the database on first
+# boot, so the push path is exercised rather than skipped.
 DATABASE_URL="postgres://$PGUSER@$PGHOST:$PGPORT/$DBNAME?sslmode=disable" \
 ADDR="127.0.0.1:$PORT" \
 DATA_DIR="$WORK/data" \
 BASE_URL="http://127.0.0.1:$PORT" \
 BOOTSTRAP_ADMIN_EMAIL=admin@localhost \
 BOOTSTRAP_ADMIN_PASSWORD="$ADMIN_PW" \
-VAPID_SUBJECT=mailto:admin@localhost \
 SLOCK_WEB_DIR=${SLOCK_WEB_DIR-web/assets} \
   "$BIN" >"$LOG" 2>&1 &
 PID=$!
