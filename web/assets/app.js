@@ -1851,6 +1851,47 @@ function emojiMatches(query) {
   return starts.concat(contains).slice(0, EMOJI_AUTO_MAX);
 }
 
+// Horizontal offset of a character index inside a textarea, in pixels from its
+// left edge. There is no API for this, so lay the text out in a hidden mirror
+// with the same metrics and read the marker's position — which gets soft-
+// wrapped lines right, where measuring the text since the last newline would
+// put the popup far off to the right.
+function caretOffsetX(ta, index) {
+  const cs = getComputedStyle(ta);
+  const mirror = document.createElement('div');
+  for (const p of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing',
+    'lineHeight', 'textTransform', 'wordSpacing', 'textIndent', 'whiteSpace',
+    'overflowWrap', 'wordBreak', 'tabSize', 'boxSizing',
+    'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+    'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth']) {
+    mirror.style[p] = cs[p];
+  }
+  Object.assign(mirror.style, {
+    position: 'absolute', visibility: 'hidden', top: '0', left: '0',
+    width: ta.offsetWidth + 'px', height: 'auto',
+  });
+  mirror.textContent = ta.value.slice(0, index);
+  const marker = document.createElement('span');
+  marker.textContent = '​'; // zero width: measured, never drawn
+  mirror.append(marker);
+  document.body.append(mirror);
+  const x = marker.offsetLeft;
+  mirror.remove();
+  return x;
+}
+
+// Park the popup under the `:` being typed, clamped so it never runs past the
+// composer's right edge.
+function placeEmojiAuto() {
+  const ta = byId('composer-input');
+  const host = byId('composer');
+  if (!emojiAuto || !ta || !host) return;
+  const x = caretOffsetX(ta, emojiAuto.start) - ta.scrollLeft;
+  const taLeft = ta.getBoundingClientRect().left - host.getBoundingClientRect().left;
+  const max = host.clientWidth - emojiAuto.el.offsetWidth;
+  emojiAuto.el.style.insetInlineStart = Math.max(0, Math.min(taLeft + x, max)) + 'px';
+}
+
 let emojiAuto = null; // { el, rows, active, start }
 
 function closeEmojiAuto() {
@@ -1907,6 +1948,7 @@ function refreshEmojiAuto() {
     emojiAuto.el.append(li);
   });
   paintEmojiAuto();
+  placeEmojiAuto(); // after fill: clamping needs the popup's real width
 }
 
 // Replace the typed `:token` with the emoji, leaving a trailing space.
