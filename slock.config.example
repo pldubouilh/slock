@@ -25,11 +25,6 @@ BOOTSTRAP_ADMIN_EMAIL=admin@localhost
 BOOTSTRAP_ADMIN_NAME=Admin
 BOOTSTRAP_ADMIN_PASSWORD=
 
-# Web Push (notifications)
-# Push needs a VAPID keypair. Leave the keys blank: slock mints a pair on first boot and appends it to this file (see below).
-VAPID_PUBLIC_KEY=
-VAPID_PRIVATE_KEY=
-VAPID_SUBJECT=mailto:admin@localhost
 
 # Email (password resets, welcome mail) - With no SendGrid key, mail is written to the server log instead of sent.
 SENDGRID_API_KEY=

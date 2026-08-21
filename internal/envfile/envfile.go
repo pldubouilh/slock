@@ -1,6 +1,6 @@
-// Package envfile reads and appends KEY=VALUE configuration files, so slock can
-// persist things it generates for itself (VAPID keys) without anyone having to
-// run a command first.
+// Package envfile reads KEY=VALUE configuration files. Nothing writes them:
+// slock never edits its own config, and generated state (the Web Push keypair)
+// lives in the database instead.
 //
 // It is deliberately not a dotenv implementation: no interpolation, no export
 // keyword, no multi-line values. Anything that needs those belongs in the real
@@ -9,9 +9,7 @@ package envfile
 
 import (
 	"bufio"
-	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -65,43 +63,4 @@ func ApplyMissing(vars map[string]string) error {
 		}
 	}
 	return nil
-}
-
-// Append adds a commented block of pairs to the end of path, creating the file
-// (0600, since it holds secrets) and its directory if needed. Existing content
-// is never rewritten, so a hand-edited file keeps its comments and order.
-func Append(path, comment string, pairs [][2]string) error {
-	if len(pairs) == 0 {
-		return nil
-	}
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-	}
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	// Start on a fresh line even if the file did not end with one.
-	if st, err := f.Stat(); err == nil && st.Size() > 0 {
-		if _, err := f.WriteString("\n"); err != nil {
-			return err
-		}
-	}
-
-	var b strings.Builder
-	if comment != "" {
-		for _, line := range strings.Split(comment, "\n") {
-			fmt.Fprintf(&b, "# %s\n", line)
-		}
-	}
-	for _, p := range pairs {
-		fmt.Fprintf(&b, "%s=%s\n", p[0], p[1])
-	}
-	_, err = f.WriteString(b.String())
-	return err
 }

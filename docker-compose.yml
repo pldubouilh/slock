@@ -18,6 +18,7 @@ services:
 
   slock:
     image: ghcr.io/pldubouilh/slock:latest
+    build: .
     restart: unless-stopped
     depends_on:
       db:
@@ -30,7 +31,7 @@ services:
       SLOCK_CONFIG: /cfg/slock.config
     volumes:
       - attachments:/data
-      - ./slock.config:/cfg/slock.config
+      - ./slock.config:/cfg/slock.config:ro
     ports:
       - "${BIND_ADDR:-127.0.0.1}:8080:8080"
 

@@ -19,8 +19,9 @@ A small, fast, self-hosted team chat.
 Start with docker compose to boot slock alongside potgres:
 
 ```sh
-cp slock.config.example slock.config
-docker compose up
+; cp slock.config.example slock.config
+; docker compose up
+# you can also docker compose up --build to build from source
 ```
 
 Then open <http://localhost:8080>. On the very first boot slock creates an admin account and prints the password:
@@ -30,9 +31,9 @@ Then open <http://localhost:8080>. On the very first boot slock creates an admin
 You need a server with docker installed, a domain, and properly configured DNS. 
 
 ```sh
-git clone https://github.com/pldubouilh/slock.git /opt/slock
-cd /opt/slock
-cp slock.config.example slock.config
+; git clone https://github.com/pldubouilh/slock.git /opt/slock
+; cd /opt/slock
+; cp slock.config.example slock.config
 ```
 
 Edit `slock.config` to set `BASE_URL` to the https domain it will be deployed on. Every other setting has a sensible default, see the comments in `slock.config.example` for the full list.
@@ -40,7 +41,7 @@ Edit `slock.config` to set `BASE_URL` to the https domain it will be deployed on
 You can now start slock: 
 
 ```sh
-docker compose up -d
+; docker compose up -d
 ```
 
 slock binds to `127.0.0.1:8080`. Front it with [caddy](https://caddyserver.com/) (or your other) to get https and reverse proxy. Example caddy config: 

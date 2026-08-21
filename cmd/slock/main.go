@@ -16,6 +16,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"slock/internal/api"
 	"slock/internal/db"
 	"slock/internal/envfile"
@@ -63,17 +65,14 @@ func run() error {
 
 	log.Printf("version %s", version.String())
 
-	// The config file slock reads at boot and writes its generated VAPID keys
-	// back to. Real environment variables always win, so this never overrides
-	// what compose's env_file already put in the environment.
+	// The config file slock reads at boot. Nothing ever writes it back: real
+	// environment variables win over it, and generated state (the Web Push
+	// keypair) belongs in the database, not in a file the server has to be
+	// able to edit.
 	cfgPath := env("SLOCK_CONFIG", "slock.config")
 	if vars, err := envfile.Load(cfgPath); err != nil {
 		log.Printf("could not read %s: %v", cfgPath, err)
 	} else if err := envfile.ApplyMissing(vars); err != nil {
-		return err
-	}
-
-	if err := ensureVAPIDKeys(cfgPath); err != nil {
 		return err
 	}
 
@@ -121,7 +120,11 @@ func run() error {
 		log.Printf("sendgrid not configured; emails will be logged only")
 	}
 
-	pusher, err := push.New(os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY"), env("VAPID_SUBJECT", "mailto:admin@localhost"))
+	vapidPub, vapidPriv, err := resolveVAPIDKeys(ctx, database)
+	if err != nil {
+		return fmt.Errorf("web push keys: %w", err)
+	}
+	pusher, err := push.New(vapidPub, vapidPriv, vapidSubject(baseURL))
 	if err != nil {
 		return fmt.Errorf("web push: %w", err)
 	}
@@ -156,49 +159,80 @@ func run() error {
 	return nil
 }
 
-// ensureVAPIDKeys mints a Web Push keypair on first boot and writes it to the
-// config file, so push works out of the box instead of requiring `slock keygen`.
+// vapidSubject is the contact a push service gets for this instance: who to
+// reach if our notifications misbehave. RFC 8292 takes a mailto: or an https:
+// URI, and browsers only allow push over https in the first place — so the
+// public origin is both valid and always right, with no knob to keep in sync.
+// VAPID_SUBJECT still overrides it for anyone who wants a specific address.
+func vapidSubject(baseURL string) string {
+	if s := strings.TrimSpace(os.Getenv("VAPID_SUBJECT")); s != "" {
+		return s
+	}
+	if strings.HasPrefix(baseURL, "https://") {
+		return baseURL
+	}
+	// Plain http means localhost, i.e. development; any accepted value does.
+	if email := strings.TrimSpace(env("BOOTSTRAP_ADMIN_EMAIL", "")); email != "" {
+		return "mailto:" + email
+	}
+	return "mailto:admin@localhost"
+}
+
+// resolveVAPIDKeys returns the Web Push keypair, minting one on first boot so
+// push works out of the box instead of requiring `slock keygen`.
 //
-// Persisting matters more than generating: regenerating on every restart would
-// silently invalidate every existing push subscription. If the file cannot be
-// written we keep the keys for this process but say loudly that they will not
-// survive a restart, rather than quietly churning them.
-func ensureVAPIDKeys(envPath string) error {
-	if os.Getenv("VAPID_PUBLIC_KEY") != "" && os.Getenv("VAPID_PRIVATE_KEY") != "" {
-		return nil
-	}
-	// A half-configured pair is a mistake worth pointing at, not something to
-	// paper over by generating a fresh one.
-	if os.Getenv("VAPID_PUBLIC_KEY") != "" || os.Getenv("VAPID_PRIVATE_KEY") != "" {
-		log.Printf("only one of VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY is set; " +
-			"web push stays disabled until both are provided")
-		return nil
+// The pair lives in the database, next to the push_subscriptions welded to it:
+// every browser subscription is bound to that public key, so a keypair that can
+// drift from the rows — a config that failed to save, a dump restored beside a
+// different file, one pair per instance — silently kills every subscription.
+//
+// VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY still win when set, and are copied into
+// the database, which is how an existing instance ports its identity across.
+// Config is then free to forget them.
+func resolveVAPIDKeys(ctx context.Context, database *db.DB) (pub, priv string, err error) {
+	envPub, envPriv := os.Getenv("VAPID_PUBLIC_KEY"), os.Getenv("VAPID_PRIVATE_KEY")
+	switch {
+	case envPub != "" && envPriv != "":
+		if _, err := database.Pool.Exec(ctx,
+			`INSERT INTO server_keys (name, public_key, private_key) VALUES ('vapid', $1, $2)
+			 ON CONFLICT (name) DO UPDATE SET public_key = EXCLUDED.public_key,
+			                                 private_key = EXCLUDED.private_key`,
+			envPub, envPriv); err != nil {
+			return "", "", err
+		}
+		log.Printf("web push keys taken from the environment and stored")
+		return envPub, envPriv, nil
+	case envPub != "" || envPriv != "":
+		// A half-configured pair is a mistake worth pointing at rather than
+		// papering over — say so, then fall back to the stored pair.
+		log.Printf("only one of VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY is set; ignoring both")
 	}
 
-	pub, priv, err := push.GenerateKeys()
-	if err != nil {
-		return fmt.Errorf("generate web push keys: %w", err)
+	err = database.Pool.QueryRow(ctx,
+		`SELECT public_key, private_key FROM server_keys WHERE name = 'vapid'`).Scan(&pub, &priv)
+	if err == nil {
+		return pub, priv, nil
 	}
-	os.Setenv("VAPID_PUBLIC_KEY", pub)
-	os.Setenv("VAPID_PRIVATE_KEY", priv)
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", "", err
+	}
 
-	err = envfile.Append(envPath,
-		"Web Push (VAPID) keys, generated by slock on first boot.\n"+
-			"Keep them: replacing these invalidates every existing push subscription\n"+
-			"and everyone has to enable notifications again.",
-		[][2]string{{"VAPID_PUBLIC_KEY", pub}, {"VAPID_PRIVATE_KEY", priv}})
-	if err != nil {
-		log.Printf("──────────────────────────────────────────────")
-		log.Printf(" generated web push keys but could NOT write %s: %v", envPath, err)
-		log.Printf(" push works now but the keys are lost on restart, which")
-		log.Printf(" invalidates subscriptions. Set them yourself to make it stick:")
-		log.Printf("   VAPID_PUBLIC_KEY=%s", pub)
-		log.Printf("   VAPID_PRIVATE_KEY=%s", priv)
-		log.Printf("──────────────────────────────────────────────")
-		return nil
+	if pub, priv, err = push.GenerateKeys(); err != nil {
+		return "", "", fmt.Errorf("generate: %w", err)
 	}
-	log.Printf("generated web push keys and saved them to %s", envPath)
-	return nil
+	// DO NOTHING, then read back: two instances booting together must agree on
+	// one pair rather than the last writer silently retiring the other's.
+	if _, err := database.Pool.Exec(ctx,
+		`INSERT INTO server_keys (name, public_key, private_key) VALUES ('vapid', $1, $2)
+		 ON CONFLICT (name) DO NOTHING`, pub, priv); err != nil {
+		return "", "", err
+	}
+	if err := database.Pool.QueryRow(ctx,
+		`SELECT public_key, private_key FROM server_keys WHERE name = 'vapid'`).Scan(&pub, &priv); err != nil {
+		return "", "", err
+	}
+	log.Printf("generated web push keys")
+	return pub, priv, nil
 }
 
 // migrateStatus prints each migration and whether it has been applied. It
@@ -299,4 +333,3 @@ func envInt(key string, def int) int {
 	}
 	return def
 }
-
