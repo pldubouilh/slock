@@ -1304,7 +1304,8 @@ function editLastOwnMessage() {
 async function submitComposer() {
   const ta = byId('composer-input');
   if (!ta || !state.currentId) return;
-  const body = ta.value.replace(/\s+$/, '');
+  closeEmojiAuto();
+  const body = replaceShortcodes(ta.value.replace(/\s+$/, ''));
 
   if (state.editingId) {
     const id = state.editingId;
@@ -1574,12 +1575,221 @@ function wireUploads() {
 
 /* ============================================================ reactions / emoji picker */
 
+// [char, name, ...aliases]. Deliberately curated rather than the full Unicode
+// set: ~330 rows is a few KB and covers what people actually type, where the
+// complete list is 1900 rows and ~100KB of payload for emoji nobody reaches
+// for. The first REACTION_COUNT rows are the reaction picker's grid, so their
+// order is load-bearing; everything after is search-only.
 const EMOJI = [
-  '👍', '❤️', '😂', '😮', '😢', '😡', '🎉', '🚀', '👀', '✅',
-  '❌', '🙏', '👏', '🔥', '💯', '😅', '😊', '😍', '🤔', '😉',
-  '😎', '🤣', '😭', '😴', '🤯', '🥳', '😱', '🤝', '💪', '☕',
-  '🍕', '🍺', '⭐', '⚡', '🐛', '🧠', '💡', '📌', '🎯', '🫡',
+  // — the reaction grid, in grid order —
+  ['👍', 'thumbsup', '+1', 'like', 'yes'],
+  ['❤️', 'heart', 'love', 'red_heart'],
+  ['😂', 'joy', 'lol', 'laugh'],
+  ['😮', 'open_mouth', 'wow', 'surprised'],
+  ['😢', 'cry', 'sad'],
+  ['😡', 'rage', 'angry', 'mad'],
+  ['🎉', 'tada', 'party', 'celebrate'],
+  ['🚀', 'rocket', 'ship', 'launch'],
+  ['👀', 'eyes', 'look', 'see', 'watching'],
+  ['✅', 'white_check_mark', 'check', 'done', 'tick'],
+  ['❌', 'x', 'cross', 'no', 'fail'],
+  ['🙏', 'pray', 'thanks', 'please'],
+  ['👏', 'clap', 'applause'],
+  ['🔥', 'fire', 'lit', 'hot'],
+  ['💯', '100', 'hundred', 'perfect'],
+  ['😅', 'sweat_smile', 'phew'],
+  ['😊', 'blush', 'smile_blush'],
+  ['😍', 'heart_eyes'],
+  ['🤔', 'thinking', 'hmm'],
+  ['😉', 'wink'],
+  ['😎', 'sunglasses', 'cool'],
+  ['🤣', 'rofl', 'rolling'],
+  ['😭', 'sob', 'crying'],
+  ['😴', 'sleeping', 'zzz'],
+  ['🤯', 'exploding_head', 'mindblown'],
+  ['🥳', 'partying', 'celebration'],
+  ['😱', 'scream'],
+  ['🤝', 'handshake', 'deal'],
+  ['💪', 'muscle', 'strong', 'flex'],
+  ['☕', 'coffee'],
+  ['🍕', 'pizza'],
+  ['🍺', 'beer'],
+  ['⭐', 'star'],
+  ['⚡', 'zap', 'lightning'],
+  ['🐛', 'bug'],
+  ['🧠', 'brain'],
+  ['💡', 'bulb', 'idea', 'light'],
+  ['📌', 'pushpin', 'pin'],
+  ['🎯', 'dart', 'target', 'bullseye'],
+  ['🫡', 'salute'],
+
+  // — faces —
+  ['😀', 'grinning'], ['😃', 'smiley'], ['😄', 'smile', 'happy'],
+  ['😁', 'grin'], ['😆', 'laughing'], ['🙂', 'slight_smile'],
+  ['🙃', 'upside_down'], ['😇', 'innocent', 'halo'], ['🥰', 'smiling_hearts'],
+  ['🤩', 'star_struck'], ['😘', 'kissing_heart', 'kiss'], ['😗', 'kissing'],
+  ['😋', 'yum', 'tasty'], ['😛', 'tongue_out'], ['😜', 'winking_tongue'],
+  ['🤪', 'zany', 'crazy'], ['🤑', 'money_mouth'], ['🤗', 'hugs'],
+  ['🤭', 'hand_over_mouth', 'oops'], ['🤫', 'shushing', 'quiet'],
+  ['🤐', 'zipper_mouth'], ['🤨', 'raised_eyebrow'], ['😐', 'neutral'],
+  ['😑', 'expressionless'], ['😶', 'no_mouth'], ['😏', 'smirk'],
+  ['😒', 'unamused', 'meh'], ['🙄', 'roll_eyes'], ['😬', 'grimacing'],
+  ['🤥', 'lying'], ['😌', 'relieved'], ['😔', 'pensive'],
+  ['😪', 'sleepy'], ['🤤', 'drooling'], ['😷', 'mask'],
+  ['🤒', 'sick', 'thermometer_face'], ['🤕', 'head_bandage'],
+  ['🤢', 'nauseated'], ['🤮', 'vomiting'], ['🤧', 'sneezing'],
+  ['🥵', 'hot_face'], ['🥶', 'cold_face'], ['🥴', 'woozy'],
+  ['😵', 'dizzy_face'], ['🤠', 'cowboy'], ['🤓', 'nerd'],
+  ['🧐', 'monocle'], ['😕', 'confused'], ['😟', 'worried'],
+  ['🙁', 'slight_frown'], ['😯', 'hushed'], ['😲', 'astonished'],
+  ['😳', 'flushed'], ['🥺', 'pleading'], ['😦', 'frowning'],
+  ['😨', 'fearful'], ['😰', 'anxious'], ['😖', 'confounded'],
+  ['😞', 'disappointed'], ['😓', 'sweat'], ['😩', 'weary'],
+  ['😫', 'tired'], ['🥱', 'yawning'], ['😤', 'triumph', 'huff'],
+  ['😠', 'angry'], ['🤬', 'cursing', 'swearing'], ['😈', 'smiling_imp'],
+  ['👿', 'imp'], ['💀', 'skull'], ['☠️', 'skull_crossbones'],
+  ['💩', 'poop'], ['🤡', 'clown'], ['👻', 'ghost'],
+  ['👽', 'alien'], ['🤖', 'robot', 'bot'], ['🎃', 'jack_o_lantern'],
+  ['🫠', 'melting'], ['🫣', 'peeking'], ['🥹', 'holding_back_tears'],
+
+  // — hands & body —
+  ['👋', 'wave', 'hello', 'hi'], ['🤚', 'raised_back_of_hand'],
+  ['✋', 'raised_hand', 'stop'], ['🖖', 'vulcan', 'spock'],
+  ['👌', 'ok_hand'], ['🤏', 'pinching'], ['✌️', 'victory', 'peace'],
+  ['🤞', 'crossed_fingers', 'luck'], ['🤟', 'love_you'],
+  ['🤘', 'metal', 'horns'], ['🤙', 'call_me', 'shaka'],
+  ['👈', 'point_left'], ['👉', 'point_right'], ['👆', 'point_up'],
+  ['👇', 'point_down'], ['✊', 'fist'], ['👊', 'punch', 'fist_bump'],
+  ['🙌', 'raised_hands', 'praise'], ['👐', 'open_hands'],
+  ['🤲', 'palms_up'], ['✍️', 'writing'], ['💅', 'nail_polish'],
+  ['🦾', 'mechanical_arm'], ['👁️', 'eye'], ['👅', 'tongue'],
+  ['👄', 'lips'], ['🦵', 'leg'], ['🦶', 'foot'], ['👂', 'ear'],
+  ['👃', 'nose'], ['🦷', 'tooth'], ['🫀', 'anatomical_heart'],
+
+  // — hearts & marks —
+  ['🧡', 'orange_heart'], ['💛', 'yellow_heart'], ['💚', 'green_heart'],
+  ['💙', 'blue_heart'], ['💜', 'purple_heart'], ['🖤', 'black_heart'],
+  ['🤍', 'white_heart'], ['🤎', 'brown_heart'], ['💔', 'broken_heart'],
+  ['💕', 'two_hearts'], ['💞', 'revolving_hearts'], ['💓', 'heartbeat'],
+  ['💖', 'sparkling_heart'], ['💘', 'cupid'], ['💝', 'gift_heart'],
+  ['💢', 'anger'], ['💥', 'boom', 'explosion'], ['💫', 'dizzy'],
+  ['💦', 'sweat_drops'], ['💨', 'dash'], ['✨', 'sparkles', 'shiny'],
+  ['🌟', 'star2', 'glowing_star'], ['💤', 'zzz_sleep'],
+
+  // — animals & nature —
+  ['🐶', 'dog'], ['🐱', 'cat'], ['🐭', 'mouse'], ['🐹', 'hamster'],
+  ['🐰', 'rabbit'], ['🦊', 'fox'], ['🐻', 'bear'], ['🐼', 'panda'],
+  ['🐨', 'koala'], ['🐯', 'tiger'], ['🦁', 'lion'], ['🐮', 'cow'],
+  ['🐷', 'pig'], ['🐸', 'frog'], ['🐵', 'monkey'],
+  ['🙈', 'see_no_evil'], ['🙉', 'hear_no_evil'], ['🙊', 'speak_no_evil'],
+  ['🐔', 'chicken'], ['🐧', 'penguin'], ['🐦', 'bird'], ['🦆', 'duck'],
+  ['🦉', 'owl'], ['🦄', 'unicorn'], ['🐝', 'bee'], ['🦋', 'butterfly'],
+  ['🐌', 'snail'], ['🐙', 'octopus'], ['🦀', 'crab'], ['🐬', 'dolphin'],
+  ['🐳', 'whale'], ['🐟', 'fish'], ['🐢', 'turtle'], ['🐍', 'snake'],
+  ['🦖', 'dinosaur', 't_rex'], ['🐘', 'elephant'], ['🐴', 'horse'],
+  ['🐑', 'sheep'], ['🐺', 'wolf'], ['🦔', 'hedgehog'], ['🦥', 'sloth'],
+  ['🌵', 'cactus'], ['🌲', 'evergreen_tree'], ['🌳', 'tree'],
+  ['🌴', 'palm_tree'], ['🌱', 'seedling'], ['🌿', 'herb'],
+  ['🍀', 'four_leaf_clover', 'luck_clover'], ['🍁', 'maple_leaf'],
+  ['🌸', 'cherry_blossom'], ['🌺', 'hibiscus'], ['🌻', 'sunflower'],
+  ['🌹', 'rose'], ['🌷', 'tulip'], ['💐', 'bouquet'],
+  ['🌍', 'earth', 'globe', 'world'], ['🌙', 'crescent_moon'],
+  ['☀️', 'sun', 'sunny'], ['⛅', 'partly_sunny'], ['☁️', 'cloud'],
+  ['🌧️', 'rain'], ['❄️', 'snowflake'], ['⛄', 'snowman'],
+  ['🌈', 'rainbow'], ['💧', 'droplet'], ['🌊', 'ocean', 'wave_water'],
+  ['🌞', 'sun_face'], ['🌚', 'new_moon_face'],
+
+  // — food & drink —
+  ['🍵', 'tea'], ['🍻', 'beers', 'cheers'], ['🍷', 'wine'],
+  ['🍸', 'cocktail'], ['🥂', 'champagne'], ['🍾', 'bottle_pop'],
+  ['🥤', 'cup_straw'], ['🍔', 'burger', 'hamburger'], ['🍟', 'fries'],
+  ['🌭', 'hotdog'], ['🌮', 'taco'], ['🌯', 'burrito'],
+  ['🍿', 'popcorn'], ['🍩', 'doughnut', 'donut'], ['🍪', 'cookie'],
+  ['🍫', 'chocolate'], ['🍬', 'candy'], ['🎂', 'birthday', 'cake'],
+  ['🧁', 'cupcake'], ['🍎', 'apple'], ['🍌', 'banana'],
+  ['🍓', 'strawberry'], ['🍇', 'grapes'], ['🍉', 'watermelon'],
+  ['🍒', 'cherries'], ['🥑', 'avocado'], ['🥐', 'croissant'],
+  ['🍞', 'bread'], ['🧀', 'cheese'], ['🥓', 'bacon'],
+  ['🍳', 'cooking', 'egg'], ['🍜', 'ramen', 'noodles'], ['🍣', 'sushi'],
+  ['🧊', 'ice_cube'], ['🥗', 'salad'], ['🍦', 'ice_cream'],
+
+  // — activity & travel —
+  ['🎊', 'confetti'], ['🎁', 'gift', 'present'], ['🏆', 'trophy', 'win'],
+  ['🥇', 'first_place', 'gold'], ['🥈', 'second_place'], ['🥉', 'third_place'],
+  ['🏅', 'medal'], ['⚽', 'soccer'], ['🏀', 'basketball'],
+  ['🏈', 'football'], ['⚾', 'baseball'], ['🎾', 'tennis'],
+  ['🎮', 'video_game', 'gaming'], ['🎲', 'dice'], ['🎸', 'guitar'],
+  ['🎧', 'headphones'], ['🎵', 'musical_note', 'music'],
+  ['🎤', 'microphone'], ['🎬', 'clapper', 'movie'], ['🎨', 'art', 'palette'],
+  ['📷', 'camera'], ['🏃', 'runner', 'running'], ['🚴', 'cyclist'],
+  ['🧘', 'yoga', 'meditate'], ['🏊', 'swimmer'], ['⛷️', 'skier'],
+  ['✈️', 'airplane', 'plane'], ['🚗', 'car'], ['🚕', 'taxi'],
+  ['🚌', 'bus'], ['🚲', 'bicycle', 'bike'], ['🛴', 'scooter'],
+  ['🚂', 'train'], ['🚁', 'helicopter'], ['⛵', 'sailboat'],
+  ['🚢', 'boat'], ['🏠', 'house', 'home'], ['🏢', 'office'],
+  ['🗼', 'tower'], ['🏝️', 'desert_island'], ['🏔️', 'mountain'],
+  ['🚦', 'traffic_light'], ['🗺️', 'map'],
+
+  // — objects & tech —
+  ['💻', 'computer', 'laptop'], ['🖥️', 'desktop'], ['⌨️', 'keyboard'],
+  ['🖱️', 'mouse_computer'], ['🖨️', 'printer'], ['📱', 'phone', 'mobile'],
+  ['📞', 'phone_receiver', 'call'], ['🔋', 'battery'], ['🔌', 'plug'],
+  ['💾', 'floppy_disk', 'save'], ['💿', 'cd'], ['📺', 'tv'],
+  ['📻', 'radio'], ['⏰', 'alarm_clock'], ['⏱️', 'stopwatch'],
+  ['⏳', 'hourglass'], ['🕐', 'clock'], ['📅', 'calendar', 'date'],
+  ['📈', 'chart_up', 'graph'], ['📉', 'chart_down'], ['📊', 'bar_chart', 'stats'],
+  ['📋', 'clipboard'], ['📍', 'round_pushpin', 'location'],
+  ['📎', 'paperclip'], ['📏', 'ruler'], ['✂️', 'scissors'],
+  ['🗑️', 'wastebasket', 'trash'], ['🔒', 'lock', 'locked'],
+  ['🔓', 'unlock', 'unlocked'], ['🔑', 'key'], ['🔨', 'hammer'],
+  ['🛠️', 'tools'], ['🔧', 'wrench'], ['🔩', 'nut_and_bolt'],
+  ['⚙️', 'gear', 'settings'], ['🧰', 'toolbox'], ['🧲', 'magnet'],
+  ['🧪', 'test_tube'], ['🧬', 'dna'], ['🔬', 'microscope'],
+  ['🔭', 'telescope'], ['📡', 'satellite'], ['🔦', 'flashlight'],
+  ['🕯️', 'candle'], ['🧯', 'fire_extinguisher'], ['🛡️', 'shield'],
+  ['🚪', 'door'], ['🛏️', 'bed'], ['🧹', 'broom'], ['🔮', 'crystal_ball'],
+  ['🎈', 'balloon'], ['🧸', 'teddy_bear'], ['📦', 'package', 'box'],
+  ['📫', 'mailbox'], ['✉️', 'envelope', 'email', 'mail'],
+  ['📤', 'outbox'], ['📥', 'inbox'], ['📜', 'scroll'],
+  ['📄', 'page', 'document', 'doc'], ['📑', 'bookmark_tabs'],
+  ['📚', 'books'], ['📖', 'book'], ['📝', 'memo', 'note'],
+  ['✏️', 'pencil'], ['🖊️', 'pen'], ['🔍', 'mag', 'search'],
+  ['💰', 'moneybag'], ['💸', 'money_wings'], ['💵', 'dollar'],
+  ['💳', 'credit_card'], ['🧾', 'receipt'], ['⚖️', 'balance_scale'],
+  ['🔗', 'link'], ['⛓️', 'chains'], ['🧱', 'bricks'],
+  ['💎', 'gem', 'diamond'], ['🏷️', 'label', 'tag'],
+
+  // — symbols —
+  ['☑️', 'ballot_box_with_check'], ['✔️', 'heavy_check_mark'],
+  ['⭕', 'o', 'circle'], ['🚫', 'no_entry_sign', 'forbidden'],
+  ['⛔', 'no_entry'], ['⚠️', 'warning', 'caution'],
+  ['🚧', 'construction', 'wip'], ['❗', 'exclamation'],
+  ['❓', 'question'], ['‼️', 'bangbang'], ['⁉️', 'interrobang'],
+  ['♻️', 'recycle'], ['🔄', 'refresh', 'arrows_counterclockwise'],
+  ['⬆️', 'arrow_up'], ['⬇️', 'arrow_down'], ['⬅️', 'arrow_left'],
+  ['➡️', 'arrow_right'], ['↩️', 'arrow_hook'], ['🔙', 'back'],
+  ['🔜', 'soon'], ['🆕', 'new'], ['🆗', 'ok'], ['🆘', 'sos'],
+  ['🔝', 'top'], ['➕', 'plus'], ['➖', 'minus'], ['➗', 'divide'],
+  ['♾️', 'infinity'], ['🔢', 'numbers'], ['🔵', 'blue_circle'],
+  ['🔴', 'red_circle'], ['🟢', 'green_circle'], ['🟡', 'yellow_circle'],
+  ['🟠', 'orange_circle'], ['🟣', 'purple_circle'], ['⚫', 'black_circle'],
+  ['⚪', 'white_circle'], ['🟥', 'red_square'], ['🟩', 'green_square'],
+  ['🟦', 'blue_square'], ['🔶', 'orange_diamond'], ['🔺', 'red_triangle_up'],
+  ['🔻', 'red_triangle_down'],
 ];
+
+// How many leading rows the reaction picker shows, so its grid stays the
+// curated set it has always been rather than the whole search corpus.
+const REACTION_COUNT = 40;
+
+// name -> row, for the `:shortcode:` pass on send.
+const EMOJI_BY_NAME = (() => {
+  const m = new Map();
+  for (const row of EMOJI) {
+    for (const name of row.slice(1)) if (!m.has(name)) m.set(name, row);
+  }
+  return m;
+})();
 
 let emojiPickerEl = null;
 
@@ -1587,11 +1797,12 @@ function buildEmojiPicker() {
   const el = document.createElement('div');
   el.className = 'emoji-picker';
   el.setAttribute('role', 'menu');
-  for (const e of EMOJI) {
+  for (const [char, name] of EMOJI.slice(0, REACTION_COUNT)) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'emoji-picker-item';
-    b.textContent = e;
+    b.textContent = char;
+    b.title = ':' + name + ':';
     el.append(b);
   }
   return el;
@@ -1602,6 +1813,153 @@ function closeEmojiPicker() {
     emojiPickerEl.remove();
     emojiPickerEl = null;
   }
+}
+
+/* -------- `:name` autocomplete in the composer
+
+   Typing `:eyes` offers matching emoji; Enter/Tab or a click inserts one.
+   Matching is prefix-first, then substring — deliberately not the palette's
+   fuzzy scorer, which on short shortcodes surfaces surprises (`:ey` matching
+   "monkey") where people expect the obvious answer at the top. */
+
+const EMOJI_AUTO_MAX = 8;
+
+// A `:word` token immediately left of the caret. The leading (^|\s) anchor is
+// what keeps `http://`, `10:30` and `ratio:2` from ever opening the popup.
+function emojiTokenAt(ta) {
+  if (!ta || ta.selectionStart !== ta.selectionEnd) return null;
+  const left = ta.value.slice(0, ta.selectionStart);
+  const m = left.match(/(?:^|\s)(:([a-z0-9_+-]{2,}))$/i);
+  if (!m) return null;
+  return { start: ta.selectionStart - m[1].length, query: m[2].toLowerCase() };
+}
+
+function emojiMatches(query) {
+  const starts = [];
+  const contains = [];
+  for (const row of EMOJI) {
+    let best = -1;
+    for (let i = 1; i < row.length; i++) {
+      const name = row[i];
+      if (name.startsWith(query)) { best = 0; break; }
+      if (best < 0 && name.includes(query)) best = 1;
+    }
+    if (best === 0) starts.push(row);
+    else if (best === 1) contains.push(row);
+    if (starts.length >= EMOJI_AUTO_MAX) break; // enough exact-ish answers
+  }
+  return starts.concat(contains).slice(0, EMOJI_AUTO_MAX);
+}
+
+let emojiAuto = null; // { el, rows, active, start }
+
+function closeEmojiAuto() {
+  if (!emojiAuto) return;
+  emojiAuto.el.remove();
+  emojiAuto = null;
+}
+
+function paintEmojiAuto() {
+  [...emojiAuto.el.children].forEach((li, i) => {
+    li.classList.toggle('emoji-auto-item--active', i === emojiAuto.active);
+  });
+}
+
+// Rebuild (or close) the popup for whatever the caret sits on now.
+function refreshEmojiAuto() {
+  const ta = byId('composer-input');
+  const tok = emojiTokenAt(ta);
+  if (!tok) { closeEmojiAuto(); return; }
+  const rows = emojiMatches(tok.query);
+  if (!rows.length) { closeEmojiAuto(); return; }
+
+  if (!emojiAuto) {
+    const el = document.createElement('ul');
+    el.className = 'emoji-auto';
+    el.setAttribute('role', 'listbox');
+    // mousedown, not click: the composer must never lose focus, or the caret
+    // position we are about to splice into is gone.
+    el.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const li = e.target.closest('.emoji-auto-item');
+      if (li) insertEmojiAt(Number(li.dataset.i));
+    });
+    (byId('composer') || document.body).append(el);
+    emojiAuto = { el, rows: [], active: 0, start: tok.start };
+  }
+  emojiAuto.rows = rows;
+  emojiAuto.start = tok.start;
+  emojiAuto.active = Math.min(emojiAuto.active, rows.length - 1);
+
+  emojiAuto.el.textContent = '';
+  rows.forEach(([char, name], i) => {
+    const li = document.createElement('li');
+    li.className = 'emoji-auto-item';
+    li.dataset.i = i;
+    li.setAttribute('role', 'option');
+    const c = document.createElement('span');
+    c.className = 'emoji-auto-char';
+    c.textContent = char;
+    const n = document.createElement('span');
+    n.className = 'emoji-auto-name';
+    n.textContent = ':' + name;
+    li.append(c, n);
+    emojiAuto.el.append(li);
+  });
+  paintEmojiAuto();
+}
+
+// Replace the typed `:token` with the emoji, leaving a trailing space.
+function insertEmojiAt(i) {
+  const ta = byId('composer-input');
+  if (!ta || !emojiAuto) return;
+  const row = emojiAuto.rows[i];
+  if (!row) return;
+  const start = emojiAuto.start;
+  const rest = ta.value.slice(ta.selectionStart);
+  ta.value = ta.value.slice(0, start) + row[0] + ' ' + rest;
+  const caret = start + row[0].length + 1;
+  closeEmojiAuto();
+  ta.focus();
+  ta.setSelectionRange(caret, caret);
+  autogrow();
+  queueDraftSave();
+}
+
+// Claim the keys the popup owns while it is open, before the composer's own
+// Enter/ArrowUp bindings see them. Returns true when the key was consumed.
+function emojiAutoKey(e) {
+  if (!emojiAuto) return false;
+  switch (e.key) {
+    case 'ArrowDown':
+      emojiAuto.active = (emojiAuto.active + 1) % emojiAuto.rows.length;
+      paintEmojiAuto();
+      return true;
+    case 'ArrowUp':
+      emojiAuto.active = (emojiAuto.active - 1 + emojiAuto.rows.length) % emojiAuto.rows.length;
+      paintEmojiAuto();
+      return true;
+    case 'Enter':
+    case 'Tab':
+      if (e.shiftKey && e.key === 'Tab') return false;
+      insertEmojiAt(emojiAuto.active);
+      return true;
+    case 'Escape':
+      closeEmojiAuto();
+      return true;
+    default:
+      return false;
+  }
+}
+
+// `:eyes:` -> 👀 on send, for people who type shortcodes from muscle memory.
+// Only whole, whitespace-delimited tokens with an exact name, so prose like
+// "ratio 3:2:1" and inline `code` are left alone.
+function replaceShortcodes(text) {
+  return text.replace(/(^|\s):([a-z0-9_+-]{2,}):(?=\s|$)/gi, (all, pre, name) => {
+    const row = EMOJI_BY_NAME.get(name.toLowerCase());
+    return row ? pre + row[0] : all;
+  });
 }
 
 // target: a .msg element (react to it) or the composer form (insert emoji).
@@ -2785,13 +3143,12 @@ function reopenDM(channelId) {
   }
 }
 
-async function closeDMConversation() {
+// No confirm, no toast: hiding is non-destructive (history is kept, the
+// conversation returns on the next message), so the rail change IS the
+// feedback.
+function closeDMConversation() {
   const ch = state.channels.get(state.currentId);
   if (!ch || ch.kind !== 'dm') return;
-  const ok = await confirmModal(
-    `Hide the conversation with ${channelDisplayName(ch)} on this device? History is kept — it comes back on the next message.`,
-    'Hide');
-  if (!ok) return;
   closedDMs.add(ch.id);
   saveClosedDMs();
   const next = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
@@ -2802,7 +3159,6 @@ async function closeDMConversation() {
     renderSidebar();
     renderChannelHeader();
   }
-  toast(`Hid conversation with ${channelDisplayName(ch)}`);
 }
 
 /* -------- channel attachments (#files-btn) */
@@ -4274,10 +4630,17 @@ function wireComposer() {
     autogrow();
     if (ta.value.trim()) sendTyping();
     queueDraftSave();
+    refreshEmojiAuto();
   });
+  // Moving the caret off the token (arrows, click) retires the popup.
+  on(ta, 'click', () => refreshEmojiAuto());
+  on(ta, 'blur', () => closeEmojiAuto());
   on(byId('composer-cancel'), 'click', () => cancelEdit());
   on(ta, 'keydown', (e) => {
     if (e.isComposing) return;
+    // The `:name` popup claims its keys first, so Enter picks an emoji
+    // instead of sending and ArrowUp moves the list instead of editing.
+    if (emojiAutoKey(e)) { e.preventDefault(); return; }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       submitComposer();

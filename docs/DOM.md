@@ -91,6 +91,12 @@ strings, so the templates are where message/row structure lives.
 The composer is a `<textarea>`: Enter sends, Shift+Enter newlines, and JS
 auto-grows it by setting `style.height` (the only inline style JS writes).
 
+Typing `:name` in it opens an emoji autocomplete: JS mounts a `ul.emoji-auto`
+of `li.emoji-auto-item` (`.emoji-auto-char` + `.emoji-auto-name`, active row
+marked `.emoji-auto-item--active`) inside `#composer`, and ↑/↓/Enter/Tab/Esc
+belong to that list while it is open. A whole `:name:` token is swapped for
+its emoji on send.
+
 ## Templates (in `index.html`, inside `<template>`)
 
 Each lists the classes JS looks for. Nest them however the design needs.
