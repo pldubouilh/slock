@@ -575,7 +575,13 @@ function refreshMsgEl(channelId, m) {
   if (!el) return;
   const idx = st.msgs.indexOf(m);
   const prev = idx > 0 ? st.msgs[idx - 1] : null;
+  // Read before the swap: no scroll event has fired yet, so this is still the
+  // pre-mutation answer.
+  const wasAtBottom = state.atBottom;
   el.replaceWith(makeMsgEl(m, prev, st));
+  // A first reaction, a pin badge or an edit makes the node taller. If the
+  // reader was pinned to the bottom, follow the growth instead of cropping it.
+  if (wasAtBottom) scrollToBottom();
 }
 
 function renderMessagesFull(channelId) {
@@ -1280,11 +1286,12 @@ function quoteReply(msgId) {
   if (!m || m.deleted_at || !m.body || !m.body.trim()) return;
   const ta = byId('composer-input');
   if (!ta) return;
+  // The quote goes on top, whatever was already typed stays below it as the
+  // reply — the reading order of a quoted answer.
   const quote = m.body.split('\n').map((l) => '> ' + l).join('\n') + '\n';
-  const cur = ta.value;
-  ta.value = cur && !/\n$/.test(cur) ? cur + '\n' + quote : cur + quote;
+  ta.value = quote + ta.value;
   ta.focus();
-  ta.setSelectionRange(ta.value.length, ta.value.length);
+  ta.setSelectionRange(ta.value.length, ta.value.length); // carry on at the end
   autogrow();
   queueDraftSave();
 }
@@ -1622,6 +1629,7 @@ const EMOJI = [
   ['📌', 'pushpin', 'pin'],
   ['🎯', 'dart', 'target', 'bullseye'],
   ['🫡', 'salute'],
+  ['🤷', 'shrug'],
 
   // — faces —
   ['😀', 'grinning'], ['😃', 'smiley'], ['😄', 'smile', 'happy'],
@@ -4668,6 +4676,10 @@ function wireComposer() {
     e.preventDefault();
     submitComposer();
   });
+  // Tapping send must not steal focus from the textarea: on phones that closes
+  // the keyboard, and you almost always have another line to write. Cancelling
+  // mousedown keeps focus where it is without blocking the click itself.
+  on(byId('send-btn'), 'mousedown', (e) => e.preventDefault());
   on(ta, 'input', () => {
     autogrow();
     if (ta.value.trim()) sendTyping();
