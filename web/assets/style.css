@@ -1937,6 +1937,36 @@ input[type="checkbox"] {
 }
 .files-more:hover { color: var(--text-1); }
 
+/* pinned messages modal (#pins-btn) — a picker, so each row is one line */
+.pins-list { display: flex; flex-direction: column; }
+.prow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: 7px 6px;
+  border-radius: var(--r-s);
+  cursor: pointer;
+}
+.prow:hover { background: var(--bg-2); }
+.prow-avatar { width: 30px; height: 30px; font-size: 11px; flex-shrink: 0; }
+.prow-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.prow-head { display: flex; align-items: baseline; gap: var(--sp-2); }
+.prow-author { font-size: var(--fs-m); font-weight: 600; }
+.prow-time { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; }
+.prow-body {
+  font-size: var(--fs-s);
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prow-unpin { width: 26px; height: 26px; flex-shrink: 0; }
+.prow-unpin:hover { color: var(--danger); }
+.pins-empty { color: var(--text-3); font-size: var(--fs-m); padding: var(--sp-2) 0; }
+
+/* a pinned message keeps its star lit once the toolbar fades */
+.msg--pinned .msg-pin { opacity: 1; }
+
 /* device-local sidebar & chat colours: preset combos + free pickers */
 .combo-swatches { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
 .combo {

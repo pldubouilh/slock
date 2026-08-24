@@ -189,6 +189,7 @@ const state = {
   editingId: null,         // message id being edited in the composer
   lastReadSent: new Map(), // channelId -> last message id POSTed to /read
   membersRefresh: null,    // live members-modal refresh hook
+  pinsRefresh: null,       // live pins-modal refresh hook
 };
 
 const LS = {
@@ -495,9 +496,20 @@ function makeMsgEl(m, prev, st) {
     show('.msg-edit', own && !m.deleted_at);
     show('.msg-delete', (own || (me && me.is_admin)) && !m.deleted_at);
     show('.msg-react', !m.deleted_at);
+    show('.msg-pin', !m.deleted_at);
     show('.msg-reply', !m.deleted_at && !!(m.body && m.body.trim()));
     show('.msg-copy', !m.deleted_at);
+    // Filled star = pinned, like the mute bell's two-icon toggle.
+    const pin = actions.querySelector('.msg-pin');
+    if (pin) {
+      setHidden(pin.querySelector('.star-plain'), !!m.pinned);
+      setHidden(pin.querySelector('.star-filled'), !m.pinned);
+      pin.title = m.pinned ? 'Unpin message' : 'Pin message';
+      pin.setAttribute('aria-label', pin.title);
+      pin.setAttribute('aria-pressed', m.pinned ? 'true' : 'false');
+    }
   }
+  el.classList.toggle('msg--pinned', !!m.pinned);
 
   if (m.failed) {
     const retry = document.createElement('button');
@@ -1091,6 +1103,8 @@ function renderChannelHeader() {
     muteBtn.setAttribute('aria-label', muteBtn.title);
     muteBtn.setAttribute('aria-pressed', muted ? 'true' : 'false');
   }
+  const pinsBtn = byId('pins-btn');
+  if (pinsBtn) pinsBtn.hidden = !ch;
   const filesBtn = byId('files-btn');
   if (filesBtn) filesBtn.hidden = !ch; // any readable channel has history
   const infoBtn = byId('info-btn');
@@ -2301,6 +2315,18 @@ function connectSSE() {
       m.reactions = reactions || [];
       refreshMsgEl(channel_id, m);
     }
+  });
+
+  es.addEventListener('pin', (e) => {
+    const { message_id, channel_id, pinned } = JSON.parse(e.data);
+    const st = chanState(channel_id);
+    const m = st.byId.get(message_id);
+    if (m) {
+      m.pinned = !!pinned;
+      refreshMsgEl(channel_id, m);
+    }
+    // The list is per channel, and a pin elsewhere must not repaint it.
+    if (state.pinsRefresh) state.pinsRefresh(channel_id);
   });
 
   es.addEventListener('channel.new', (e) => {
@@ -4751,6 +4777,10 @@ function wireMessageList() {
       openEmojiPicker(anchor, (emoji) => toggleReaction(msgId, emoji));
       return;
     }
+    if (e.target.closest('.msg-pin') && msgId) {
+      togglePin(msgId);
+      return;
+    }
     if (e.target.closest('.msg-reply') && msgId) {
       quoteReply(msgId);
       return;
@@ -4814,6 +4844,7 @@ function wireHeader() {
   on(byId('members-btn'), 'click', openMembersModal);
   on(byId('mute-btn'), 'click', toggleMute);
   on(byId('files-btn'), 'click', openFilesModal);
+  on(byId('pins-btn'), 'click', openPinsModal);
   on(byId('close-dm-btn'), 'click', closeDMConversation);
   on(byId('info-btn'), 'click', openChannelInfoModal);
   on(byId('jump-latest'), 'click', () => {

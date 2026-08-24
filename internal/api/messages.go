@@ -92,7 +92,28 @@ func (s *Server) hydrate(ctx context.Context, msgs []db.Message, viewerID int64)
 			m.Reactions = append(m.Reactions, re)
 		}
 	}
-	return rrows.Err()
+	if err := rrows.Err(); err != nil {
+		return err
+	}
+
+	// Third and last batch query: which of these are pinned. Same shape as the
+	// two above — one round trip for the whole page, never one per message.
+	prows, err := s.DB.Pool.Query(ctx,
+		`SELECT message_id FROM pins WHERE message_id = ANY($1)`, ids)
+	if err != nil {
+		return err
+	}
+	defer prows.Close()
+	for prows.Next() {
+		var mid int64
+		if err := prows.Scan(&mid); err != nil {
+			return err
+		}
+		if m := byID[mid]; m != nil {
+			m.Pinned = true
+		}
+	}
+	return prows.Err()
 }
 
 // loadReactions aggregates the reactions of a single message.

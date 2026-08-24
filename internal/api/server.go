@@ -96,9 +96,12 @@ func (s *Server) Routes() http.Handler {
 	// -- messages --------------------------------------------------------
 	mux.HandleFunc("GET /api/channels/{id}/messages", s.auth(s.handleListMessages))
 	mux.HandleFunc("GET /api/channels/{id}/attachments", s.auth(s.handleListChannelAttachments))
+	mux.HandleFunc("GET /api/channels/{id}/pins", s.auth(s.handleListPins))
 	mux.HandleFunc("POST /api/channels/{id}/messages", s.auth(s.handleCreateMessage))
 	mux.HandleFunc("PATCH /api/messages/{id}", s.auth(s.handleUpdateMessage))
 	mux.HandleFunc("DELETE /api/messages/{id}", s.auth(s.handleDeleteMessage))
+	mux.HandleFunc("PUT /api/messages/{id}/pin", s.auth(s.handlePinMessage))
+	mux.HandleFunc("DELETE /api/messages/{id}/pin", s.auth(s.handleUnpinMessage))
 	mux.HandleFunc("PUT /api/messages/{id}/reactions/{emoji}", s.auth(s.handleAddReaction))
 	mux.HandleFunc("DELETE /api/messages/{id}/reactions/{emoji}", s.auth(s.handleRemoveReaction))
 

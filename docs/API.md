@@ -147,6 +147,15 @@ DM channels cannot be renamed, joined, or left.
 | DELETE | `/api/messages/{id}` | – | `204` (soft delete) |
 | PUT | `/api/messages/{id}/reactions/{emoji}` | – | `204` |
 | DELETE | `/api/messages/{id}/reactions/{emoji}` | – | `204` |
+| PUT | `/api/messages/{id}/pin` | – | `204` |
+| DELETE | `/api/messages/{id}/pin` | – | `204` |
+| GET | `/api/channels/{id}/pins` | `?limit=` (default 50, max 200) | `200 {pins: [Message + pinned_by, pinned_at]}` |
+
+A pin belongs to the channel rather than to the person who placed it: pinning
+is recorded once per message, anyone who may read the channel may pin or unpin
+(the same rule as reactions), and a soft-deleted message is refused and drops
+out of the listing. Messages carry `pinned` in every response, hydrated with
+attachments and reactions in the same batch.
 
 - `limit` defaults to 50, max 200. Messages come back **oldest → newest**.
 - `before=<id>` returns messages older than that id (scroll-back);
@@ -217,6 +226,7 @@ channel with `after=<last known id>`.
 | `message.update` | `{message: Message}` |
 | `message.delete` | `{message_id, channel_id}` |
 | `reaction` | `{message_id, channel_id, reactions: [Reaction]}` |
+| `pin` | `{message_id, channel_id, pinned}` — a message was pinned or unpinned |
 | `channel.new` | `{channel: Channel}` — you were added, or a public channel was created |
 | `channel.update` | `{channel: Channel}` |
 | `channel.members` | `{channel_id, members: [id], member_count}` |

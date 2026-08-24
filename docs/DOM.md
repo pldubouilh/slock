@@ -52,6 +52,7 @@ strings, so the templates are where message/row structure lives.
                             [hidden] when the channel has no topic
       #channel-actions      holds #members-btn, #join-btn, #mute-btn (bell icon,
                       `.bell-plain`/`.bell-slash` toggled by mute state),
+                      #pins-btn (pinned-messages modal),
                       #files-btn (channel attachments modal), #info-btn,
                       #close-dm-btn (DMs only: hides the conversation from
                       the rail on this device — localStorage
@@ -121,15 +122,16 @@ write `textContent` on the avatar element itself — that would delete the image
 
 - `#tpl-message` → root `.msg` (JS sets `dataset.id`, `dataset.userId`,
   `.msg--own`, `.msg--compact` for same-author runs, `.msg--deleted`,
-  `.msg--pending`, `.msg--unread-start`)
+  `.msg--pending`, `.msg--unread-start`, `.msg--pinned`)
   - `.msg-avatar` (an avatar element — see Avatars above)
   - `.msg-author`, `.msg-time`, `.msg-edited` (JS toggles `[hidden]`)
   - `.msg-body` — JS sets rendered content
   - `.msg-attachments` — JS appends attachment clones
   - `.msg-reactions` — JS appends `#tpl-reaction` clones
-  - `.msg-actions` with `.msg-react`, `.msg-reply` (quotes the body into the
-    composer as `> ` lines; hidden for body-less messages), `.msg-edit`,
-    `.msg-delete`, `.msg-copy`
+  - `.msg-actions` with `.msg-react`, `.msg-pin` (star toggle —
+    `.star-plain`/`.star-filled` swapped by pinned state, like the mute bell),
+    `.msg-reply` (quotes the body into the composer as `> ` lines; hidden for
+    body-less messages), `.msg-edit`, `.msg-delete`, `.msg-copy`
   - clicking `.msg-author` or `.msg-avatar` opens the author's DM (pointer
     cursor only — deliberately no link styling)
 - `#tpl-day-divider` → `.day-divider` with `.day-divider-label`
@@ -210,6 +212,10 @@ which uses `.modal-open` on `<body>` for scroll locking. Close buttons carry
 - `#tpl-modal-confirm` → `.confirm-text`, `.confirm-ok`, `.confirm-cancel`
 - `#tpl-modal-files` → `.files-title`, `.files-list`, `.files-empty`,
   `.files-more` (pagination button)
+- `#tpl-modal-pins` → `.pins-title`, `.pins-list`, `.pins-empty`
+- `#tpl-pin-row` → `.prow` (dataset.id) with `.prow-avatar`, `.prow-author`,
+  `.prow-time`, `.prow-body` (one-line preview) and `.prow-unpin`; clicking the
+  row jumps to the message, the button unpins in place
 - `#tpl-file-row` → `.frow` with `.frow-thumb` (`.frow-img` for images —
   clicking it opens the lightbox — else `.frow-icon`), `.frow-name`
   (download link) and `.frow-meta`

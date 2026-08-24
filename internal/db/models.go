@@ -75,7 +75,10 @@ type Message struct {
 	DeletedAt   *time.Time   `json:"deleted_at,omitempty"`
 	Attachments []Attachment `json:"attachments"`
 	Reactions   []Reaction   `json:"reactions"`
-	ClientID    string       `json:"client_id,omitempty"` // echoed back for optimistic sends
+	// Pinned is never omitempty: clients merge message frames over local
+	// state, so an unpin has to arrive as an explicit false.
+	Pinned   bool   `json:"pinned"`
+	ClientID string `json:"client_id,omitempty"` // echoed back for optimistic sends
 }
 
 type Attachment struct {
