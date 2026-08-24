@@ -1,10 +1,22 @@
-// slock service worker: app-shell caching, web push, notification clicks.
+// slock service worker: app-shell caching, offline reads, web push,
+// notification clicks.
 // The page registers this script as /sw.js?v=<server build id>; a new build
 // changes the URL (new worker) and the cache name (old shells cleaned up on
 // activate). 'dev' is the fallback when no version is known.
 
 const VERSION = new URL(self.location.href).searchParams.get('v') || 'dev';
 const CACHE = `slock-${VERSION}`;
+
+// The API cache is deliberately NOT versioned: a deploy replaces the shell but
+// must not throw away the messages someone is about to read on a plane. It is
+// swept on logout instead (see the 'clear-cache' message below), because the
+// Cache API is scoped to the origin rather than to a user.
+const API_CACHE = 'slock-api';
+
+// Enough history to read a channel back, capped so a busy workspace cannot
+// grow the store without bound. The client asks for fewer (75) on the first
+// page, so this is a ceiling rather than a target.
+const MAX_CACHED_MESSAGES = 100;
 
 const SHELL = [
   '/',
@@ -32,18 +44,130 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    await Promise.all(names.filter((n) => n !== CACHE).map((n) => caches.delete(n)));
+    // Sweep superseded shells, but spare the API cache — it is not versioned
+    // and its whole point is surviving the deploy that replaced the shell.
+    await Promise.all(names
+      .filter((n) => n !== CACHE && n !== API_CACHE)
+      .map((n) => caches.delete(n)));
     await self.clients.claim();
   })());
 });
+
+// The page asks for this on logout: a second person signing in on the same
+// device must not inherit the first one's messages.
+self.addEventListener('message', (event) => {
+  const data = event.data || {};
+  if (data.type !== 'clear-cache') return;
+  event.waitUntil((async () => {
+    await caches.delete(API_CACHE);
+    if (event.ports && event.ports[0]) event.ports[0].postMessage({ cleared: true });
+  })());
+});
+
+// ---------------------------------------------------------------------------
+// offline reads — the GETs worth keeping so a channel is readable with no
+// network. Everything else under /api/ is a write, an endless stream, or a
+// file, and is passed straight through untouched.
+// ---------------------------------------------------------------------------
+
+function offlineReadable(url) {
+  switch (url.pathname) {
+    case '/api/auth/me':      // boot dies without this one
+    case '/api/channels':
+    case '/api/users':
+    case '/api/workspace':
+    case '/api/version':
+      return true;
+  }
+  // A channel's newest page, which is what openChannel asks for. Paging
+  // through older history stays online-only: those pages are meaningless
+  // without the live list they hang off.
+  if (/^\/api\/channels\/\d+\/messages$/.test(url.pathname)) {
+    return !url.searchParams.has('before') && !url.searchParams.has('after');
+  }
+  return false;
+}
+
+// Store the newest MAX_CACHED_MESSAGES of a history page. The server returns
+// them oldest-first, so the tail is the recent end.
+async function putMessages(cache, req, res) {
+  try {
+    const data = await res.clone().json();
+    if (Array.isArray(data.messages) && data.messages.length > MAX_CACHED_MESSAGES) {
+      data.messages = data.messages.slice(-MAX_CACHED_MESSAGES);
+      const headers = new Headers(res.headers);
+      headers.delete('content-length'); // the body is no longer that length
+      await cache.put(req, new Response(JSON.stringify(data), { status: 200, headers }));
+      return;
+    }
+  } catch { /* not the shape we expected — keep it verbatim */ }
+  await cache.put(req, res.clone());
+}
+
+// Storing the identity doubles as the check for it: if the person behind this
+// session changed, everything cached belongs to someone else.
+async function putMe(cache, req, res) {
+  try {
+    const fresh = await res.clone().json();
+    const prev = await cache.match(req);
+    if (prev) {
+      const old = await prev.json();
+      if (old && old.user && fresh && fresh.user && old.user.id !== fresh.user.id) {
+        await caches.delete(API_CACHE);
+        cache = await caches.open(API_CACHE);
+      }
+    }
+  } catch { /* unreadable either side: fall through and just store */ }
+  await cache.put(req, res.clone());
+}
+
+async function putApi(req, url, res) {
+  const cache = await caches.open(API_CACHE);
+  if (url.pathname === '/api/auth/me') return putMe(cache, req, res);
+  if (url.pathname.endsWith('/messages')) return putMessages(cache, req, res);
+  return cache.put(req, res.clone());
+}
+
+// A cached body, flagged so the page can say it is showing saved messages.
+async function fromCache(res) {
+  const headers = new Headers(res.headers);
+  headers.set('X-Slock-Offline', '1');
+  return new Response(await res.blob(), {
+    status: res.status, statusText: res.statusText, headers,
+  });
+}
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
-  // Never cache the API (including /api/events).
-  if (url.pathname.startsWith('/api/')) return;
+
+  // API: network-first for the handful of reads a channel needs, so being
+  // online behaves exactly as it did before — the cache is consulted only
+  // when the fetch itself fails. /api/events (an endless stream), /api/files
+  // and every write fall through to the browser untouched.
+  if (url.pathname.startsWith('/api/')) {
+    if (!offlineReadable(url)) return;
+    event.respondWith((async () => {
+      try {
+        const res = await fetch(req);
+        // Hand the page its response immediately and store a clone in the
+        // background: a channel open must not wait on a cache write.
+        if (res.ok) event.waitUntil(putApi(req, url, res.clone()));
+        return res;
+      } catch {
+        // Scoped to the API store, and ignoreSearch so a changed page size
+        // (?limit=) still finds the copy that was saved under the old one.
+        const cache = await caches.open(API_CACHE);
+        const cached = await cache.match(req, { ignoreSearch: true });
+        // No copy: fail exactly as an offline fetch does today, so api()
+        // raises its usual network error rather than a confusing empty 200.
+        return cached ? fromCache(cached) : Response.error();
+      }
+    })());
+    return;
+  }
 
   // Navigations: network-first, cached shell as offline fallback.
   if (req.mode === 'navigate') {

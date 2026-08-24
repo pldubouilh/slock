@@ -140,11 +140,18 @@ async function api(path, opts = {}) {
     res = await fetch(path, init);
   } catch (err) {
     if (err.name === 'AbortError') throw err;
+    // Deliberately silent: the connection banner already says we are offline,
+    // and anything that retries would otherwise bury the screen in identical
+    // toasts. Callers that need to show something still get the thrown error
+    // (the composer's retry row, a modal's inline error). Real server errors
+    // — a response that arrived and said no — are toasted below.
     const e = new Error('Network error');
     e.code = 'network';
-    if (doToast) toast('Network error — are you offline?', true);
     throw e;
   }
+  // The service worker flags anything it served from its offline store, so the
+  // connection banner can say "saved messages" rather than "reconnecting".
+  if (res.headers.get('X-Slock-Offline')) state.offlineCache = true;
   if (res.status === 401) {
     location.href = '/login.html';
     throw Object.assign(new Error('Unauthorized'), { code: 'unauthorized' });
@@ -176,6 +183,7 @@ const state = {
   online: new Set(),       // user ids
   typing: new Map(),       // channelId -> Map(userId -> expiresAt)
   connected: false,
+  offlineCache: false,     // a response came from the service worker's store
   sseClientId: 0,          // this tab's stream id, from the SSE `hello` frame
   atBottom: true,
   editingId: null,         // message id being edited in the composer
@@ -202,6 +210,7 @@ function chanState(id) {
     st = {
       msgs: [], byId: new Map(), byClient: new Map(),
       loaded: false, loadingOlder: false, hasMore: true,
+      olderRetryAt: 0, // don't re-ask for history before this (see loadOlder)
       stale: false, unreadStartId: null, jumpCount: 0,
     };
     state.chan.set(id, st);
@@ -821,6 +830,9 @@ function renderBody(el, body) {
 
 const HISTORY_PAGE = 75;
 const OLDER_PAGE = 100;
+// How long a channel stops asking for older history after a failed page.
+// Cleared outright on reconnect, so this only paces the still-broken case.
+const OLDER_RETRY_MS = 30_000;
 
 function addMessageToState(channelId, m) {
   const st = chanState(channelId);
@@ -867,6 +879,10 @@ function placeUnreadDivider(channelId) {
 async function loadOlder(channelId) {
   const st = chanState(channelId);
   if (st.loadingOlder || !st.hasMore || !st.loaded) return false;
+  // Scrolling fires this constantly, so a failed page must not be retried on
+  // the very next event — offline that means hundreds of doomed requests a
+  // minute, each one flashing the loader.
+  if (st.olderRetryAt && Date.now() < st.olderRetryAt) return false;
   const oldest = st.msgs.find((m) => m.id);
   if (!oldest) return false;
   st.loadingOlder = true;
@@ -884,7 +900,15 @@ async function loadOlder(channelId) {
       }
       prependToDom(channelId, fresh);
     }
+    st.olderRetryAt = 0;
     return fresh.length > 0;
+  } catch {
+    // Older pages are deliberately not cached for offline reading, so this is
+    // the expected outcome on a plane. Back off rather than give up: hasMore
+    // stays true, because the history is still there and must be reachable
+    // once the network is — a reconnect clears this immediately.
+    st.olderRetryAt = Date.now() + OLDER_RETRY_MS;
+    return false;
   } finally {
     st.loadingOlder = false;
     if (loader) loader.hidden = true;
@@ -2183,11 +2207,36 @@ function scheduleReloadForUpdate() {
   setTimeout(() => location.reload(), 1000);
 }
 
+// Whether the server is currently out of reach. navigator.onLine is the
+// browser's own verdict and covers the plane case exactly; the second clause
+// catches a boot that was served entirely from the offline cache. Note that
+// state.connected alone would not do: it is false for the moment before the
+// first SSE frame lands on a perfectly healthy load.
+function isOffline() {
+  return navigator.onLine === false || (state.offlineCache && !state.connected);
+}
+
+// Dialogs whose every control talks to the server are worse than useless
+// offline — they open, then fail on each button. Refuse with a word instead.
+function blockedOffline(what) {
+  if (!isOffline()) return false;
+  toast(`${what} needs a connection — you are offline`, true);
+  return true;
+}
+
 function setOffline(off) {
   const app = byId('app');
   if (app) app.classList.toggle('is-offline', off);
   const banner = byId('connection-banner');
-  if (banner) banner.hidden = !off;
+  if (!banner) return;
+  banner.hidden = !off;
+  // Say which kind of offline this is: still trying, or reading a stored copy.
+  const label = banner.querySelector('span:last-child');
+  if (label) {
+    label.textContent = state.offlineCache
+      ? 'Offline'
+      : 'Reconnecting…';
+  }
 }
 
 function connectSSE() {
@@ -2215,6 +2264,9 @@ function connectSSE() {
     const wasDown = !state.connected;
     state.connected = true;
     backoffMs = 1000;
+    state.offlineCache = false; // live again: what follows is not a stored copy
+    // History is reachable again — drop any back-off loadOlder was serving.
+    for (const st of state.chan.values()) st.olderRetryAt = 0;
     setOffline(false);
     state.online = new Set(data.online || []);
     renderSidebar();
@@ -2903,6 +2955,7 @@ function formError(m, text) {
 /* -------- new channel + channel info (edit) */
 
 function openNewChannelModal() {
+  if (blockedOffline('Creating a channel')) return;
   const m = openModal('tpl-modal-new-channel');
   if (!m) return;
   const form = m.q('form') || m.q('.mform');
@@ -2932,6 +2985,7 @@ function openNewChannelModal() {
 
 // #info-btn: reuse the new-channel form to rename / retopic, plus leave.
 function openChannelInfoModal() {
+  if (blockedOffline('Channel details')) return;
   const ch = state.channels.get(state.currentId);
   if (!ch || ch.kind === 'dm') return;
   const m = openModal('tpl-modal-new-channel');
@@ -3023,6 +3077,7 @@ function memberRow(user, opts = {}) {
 }
 
 function openNewDMModal() {
+  if (blockedOffline('Starting a conversation')) return;
   const m = openModal('tpl-modal-new-dm');
   if (!m) return;
   const input = m.q('.dm-picker-input');
@@ -3057,6 +3112,7 @@ function openNewDMModal() {
 /* -------- members */
 
 async function openMembersModal() {
+  if (blockedOffline('Members')) return;
   const chId = state.currentId;
   const ch = state.channels.get(chId);
   if (!ch || ch.kind === 'dm') return;
@@ -3211,6 +3267,93 @@ function closeDMConversation() {
   }
 }
 
+/* -------- pinned messages (#msg-pin, #pins-btn) */
+
+// Optimistic like reactions: flip locally, let the `pin` frame confirm, and
+// put it back if the server disagreed.
+function togglePin(msgId) {
+  const st = chanState(state.currentId);
+  const m = st.byId.get(msgId);
+  if (!m || m.deleted_at) return;
+  const next = !m.pinned;
+  m.pinned = next;
+  refreshMsgEl(state.currentId, m);
+  api(`/api/messages/${msgId}/pin`, { method: next ? 'PUT' : 'DELETE' })
+    .then(() => { if (state.pinsRefresh) state.pinsRefresh(state.currentId); })
+    .catch(() => {
+      m.pinned = !next;
+      refreshMsgEl(state.currentId, m);
+    });
+}
+
+// One pinned row: who, when, and enough of the message to recognise it. The
+// server flattens the message into the pin, so `p` is a Message plus
+// pinned_by/pinned_at.
+function makePinRow(msg) {
+  const el = tpl('tpl-pin-row');
+  if (!el) return document.createDocumentFragment();
+  el.dataset.id = msg.id;
+  applyAvatar(el.querySelector('.prow-avatar'), state.users.get(msg.user_id));
+  const author = el.querySelector('.prow-author');
+  if (author) author.textContent = userName(msg.user_id);
+  const time = el.querySelector('.prow-time');
+  if (time) {
+    time.textContent = relativeTime(msg.created_at);
+    time.title = new Date(msg.created_at).toLocaleString();
+  }
+  const body = el.querySelector('.prow-body');
+  if (body) {
+    // Plain text, single line: this is a picker, not a second message list.
+    const text = (msg.body || '').trim();
+    const files = (msg.attachments || []).length;
+    body.textContent = text || (files ? `${files} attachment${files === 1 ? '' : 's'}` : '');
+  }
+  return el;
+}
+
+function openPinsModal() {
+  if (blockedOffline('Pinned messages')) return;
+  const ch = state.channels.get(state.currentId);
+  if (!ch) return;
+  const m = openModal('tpl-modal-pins', {
+    onClose: () => { state.pinsRefresh = null; },
+  });
+  if (!m) return;
+  const title = m.q('.pins-title');
+  if (title) title.textContent = `Pinned — ${channelDisplayName(ch)}`;
+  const list = m.q('.pins-list');
+  const empty = m.q('.pins-empty');
+
+  const load = async () => {
+    if (!list) return;
+    try {
+      const data = await api(`/api/channels/${ch.id}/pins`);
+      list.textContent = '';
+      for (const p of data.pins || []) list.append(makePinRow(p));
+      if (empty) empty.hidden = list.children.length > 0;
+    } catch { /* toasted by api() */ }
+  };
+
+  // Someone else pinning (or this tab doing it) repaints the open list.
+  state.pinsRefresh = (channelId) => { if (channelId === ch.id) load(); };
+
+  on(list, 'click', (e) => {
+    const row = e.target.closest('.prow');
+    if (!row) return;
+    const msgId = Number(row.dataset.id);
+    if (e.target.closest('.prow-unpin')) {
+      row.remove();
+      if (empty) empty.hidden = list.children.length > 0;
+      api(`/api/messages/${msgId}/pin`, { method: 'DELETE' }).catch(() => load());
+      return;
+    }
+    m.close();
+    openChannel(ch.id, { jumpTo: msgId });
+  });
+
+  load();
+}
+
 /* -------- channel attachments (#files-btn) */
 
 function makeFileRow(att) {
@@ -3244,6 +3387,7 @@ function makeFileRow(att) {
 }
 
 function openFilesModal() {
+  if (blockedOffline('Attachments')) return;
   const ch = state.channels.get(state.currentId);
   if (!ch) return;
   const m = openModal('tpl-modal-files');
@@ -3279,6 +3423,7 @@ function openFilesModal() {
 const AVATAR_COLORS = 10;
 
 function openProfileModal() {
+  if (blockedOffline('Your profile')) return;
   const m = openModal('tpl-modal-profile');
   if (!m || !state.me) return;
   const form = m.q('form') || m.q('.mform');
@@ -3625,6 +3770,7 @@ function openProfileModal() {
 /* -------- password */
 
 function openPasswordModal(forced = false) {
+  if (blockedOffline('Changing your password')) return;
   const m = openModal('tpl-modal-password', { forced });
   if (!m) return;
   const form = m.q('form') || m.q('.mform');
@@ -3710,6 +3856,7 @@ function showAdminResult(m, text, secret) {
 }
 
 async function openAdminModal() {
+  if (blockedOffline('Admin')) return;
   if (!state.me || !state.me.is_admin) return;
   const m = openModal('tpl-modal-admin');
   if (!m) return;
@@ -4386,6 +4533,7 @@ function wireMenu() {
   on(byId('logout-btn'), 'click', async () => {
     closeMeMenu();
     try { await api('/api/auth/logout', { method: 'POST', toast: false }); } catch { /* ignore */ }
+    await clearOfflineCache(); // before the redirect: the next person is not this one
     location.href = '/login.html';
   });
 
@@ -4427,6 +4575,27 @@ function urlB64ToUint8Array(b64) {
 }
 
 let swRegistration = null;
+
+// Ask the worker to drop everything it stored for offline reading, and wait
+// for it: the Cache API is scoped to the origin, not to the signed-in person,
+// so this is what stops the next user on a shared device reading these
+// messages. Bounded, because a hung worker must never trap someone in a
+// session they asked to leave.
+async function clearOfflineCache() {
+  const sw = navigator.serviceWorker && navigator.serviceWorker.controller;
+  if (!sw) return;
+  await new Promise((resolve) => {
+    const done = setTimeout(resolve, 1500);
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => { clearTimeout(done); resolve(); };
+    try {
+      sw.postMessage({ type: 'clear-cache' }, [ch.port2]);
+    } catch {
+      clearTimeout(done);
+      resolve();
+    }
+  });
+}
 
 async function registerSW() {
   if (!('serviceWorker' in navigator)) return;

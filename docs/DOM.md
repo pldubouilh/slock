@@ -85,7 +85,9 @@ strings, so the templates are where message/row structure lives.
   #lightbox-img  #lightbox-caption  #lightbox-download  #lightbox-close
 #modal-root                 JS mounts dialogs here (see below)
 #toasts                     JS appends .toast elements
-#connection-banner          "Reconnecting…", JS toggles [hidden]
+#connection-banner          "Reconnecting…", JS toggles [hidden] and swaps the
+                            text of its last <span> ("Offline — showing saved
+                            messages" when reading the offline cache)
 ```
 
 The composer is a `<textarea>`: Enter sends, Shift+Enter newlines, and JS
@@ -269,6 +271,24 @@ token from `?token=`.
   `start_url: /`, `theme_color`/`background_color` matching the design, icons
   at 192/512 plus a maskable 512 and a monochrome 96 badge, all in `icons/`.
 - `sw.js`: precache the shell, network-first for navigations, cache-first for
-  `/icons/*`, never cache `/api/*`. Handles `push` (show notification, set
+  `/icons/*`. Handles `push` (show notification, set
   `navigator.setAppBadge(badge)`) and `notificationclick` (focus an existing
   client and `postMessage({type:'navigate', url})`, else open the url).
+- Offline reads: a second, unversioned cache (`slock-api`) keeps the GETs a
+  channel needs to render — `/api/auth/me`, `/api/channels`, `/api/users`,
+  `/api/workspace`, `/api/version`, and each channel's newest `messages` page
+  (no `before`/`after`), trimmed to the last 100 and filled lazily as channels
+  are opened. Strictly network-first: the copy is served only when the fetch
+  itself fails, and a miss returns a network error exactly as before, so online
+  behaviour is unchanged. Writes, `/api/events` and `/api/files/*` are never
+  cached. Cache-served responses carry `X-Slock-Offline: 1`, which flips
+  `#connection-banner` to "Offline".
+- Server-backed dialogs (profile, admin, password, new channel, new DM,
+  members, channel details, pins, attachments) refuse to open while offline —
+  each `open*Modal` starts with a guard that toasts instead, so no dialog can
+  appear whose every control would fail. Reading, scrolling and switching
+  channels stay available.
+- The store is origin-scoped, not user-scoped, so it is emptied on logout: the
+  page posts `{type:'clear-cache'}` to the worker and waits for the reply
+  before redirecting. The worker also drops everything if a fresh
+  `/api/auth/me` names a different user than the cached one.
