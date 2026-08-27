@@ -30,7 +30,11 @@ type Subscription struct {
 	Auth     string `json:"auth"`
 }
 
-// Notification is the payload delivered to the service worker.
+// Notification is the payload delivered to the service worker. Tag doubles as
+// the RFC 8030 Topic: while the device is unreachable a newer push replaces
+// the queued older one with the same topic, so a phone waking from a night of
+// chatter gets one notification per channel — the latest — instead of the
+// whole backlog rolling in as stale alerts.
 type Notification struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
@@ -158,6 +162,14 @@ func (p *Pusher) Send(ctx context.Context, sub Subscription, n Notification) err
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	req.Header.Set("TTL", strconv.Itoa(ttlSeconds))
+	// Without an explicit urgency the service assumes "normal", which FCM maps
+	// to a low-priority Android message that Doze parks until the next
+	// maintenance window (or until the app is foregrounded). Chat messages are
+	// exactly what "high" is for: deliver now, wake the device.
+	req.Header.Set("Urgency", "high")
+	if topic := topicOf(n.Tag); topic != "" {
+		req.Header.Set("Topic", topic)
+	}
 	req.Header.Set("Authorization", auth)
 	req.ContentLength = int64(len(body))
 
@@ -185,6 +197,23 @@ func (p *Pusher) Send(ctx context.Context, sub Subscription, n Notification) err
 	default:
 		return fmt.Errorf("push: %s rejected the request (%s): %s", hostOf(sub.Endpoint), resp.Status, snippet(respBody))
 	}
+}
+
+// topicOf turns a notification tag into a valid RFC 8030 Topic: at most 32
+// characters from the base64url alphabet. Anything else is dropped rather than
+// mangled into accidental collisions.
+func topicOf(tag string) string {
+	if tag == "" || len(tag) > 32 {
+		return ""
+	}
+	for _, c := range []byte(tag) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_':
+		default:
+			return ""
+		}
+	}
+	return tag
 }
 
 // decodeKey accepts base64url or standard base64, padded or not, as browsers

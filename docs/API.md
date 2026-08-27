@@ -260,10 +260,17 @@ silently.
 
 A push is sent for a new message to each member who has **no visible tab**
 (per the SSE visibility flag above — merely being connected does not count),
-is not the author, and has not muted the channel. Payload
-delivered to the service worker:
-`{title, body, tag, url, badge}` where `url` is `/?c=<channel_id>` and `badge`
-is that user's total unread count.
+is not the author, and has not muted the channel. A member who is connected
+somewhere (hidden tab) gets a 5-minute grace period first: if they read the
+channel past the message on any device in that window, or have a visible tab
+when it expires, the push is dropped — it cannot be retracted once sent. A
+newer message in the channel replaces the held payload without extending the
+deadline. Members with no connection at all are pushed immediately. Held
+pushes do not survive a server restart. Payload delivered to the service
+worker: `{title, body, tag, url, badge}` where `url` is `/?c=<channel_id>` and
+`badge` is that user's total unread count, computed at delivery time. Requests
+to the push service carry `Urgency: high` and `Topic: channel-<id>`, so an
+unreachable device wakes to at most one queued notification per channel.
 
 ## External send API
 

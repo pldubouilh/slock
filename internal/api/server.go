@@ -37,6 +37,8 @@ type Server struct {
 	Media  *media.Store
 	Mailer *mail.Mailer
 	Pusher *push.Pusher
+
+	pending pendingPushes // grace-delayed web pushes, see notifyNewMessage
 }
 
 func New(cfg Config, database *db.DB, hub *realtime.Hub, m *media.Store, mailer *mail.Mailer, pusher *push.Pusher) *Server {

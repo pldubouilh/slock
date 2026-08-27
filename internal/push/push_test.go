@@ -408,7 +408,7 @@ func TestSendRequestShape(t *testing.T) {
 
 	p := newPusher(t)
 	sub := testSubscription(t, srv.URL+"/push/xyz")
-	if err := p.Send(context.Background(), sub, Notification{Title: "Ana", Body: "hi", Badge: 2}); err != nil {
+	if err := p.Send(context.Background(), sub, Notification{Title: "Ana", Body: "hi", Tag: "channel-7", Badge: 2}); err != nil {
 		t.Fatal(err)
 	}
 	if got.Method != http.MethodPost {
@@ -418,6 +418,8 @@ func TestSendRequestShape(t *testing.T) {
 		"Content-Encoding": "aes128gcm",
 		"Content-Type":     "application/octet-stream",
 		"TTL":              "86400",
+		"Urgency":          "high",
+		"Topic":            "channel-7",
 	} {
 		if v := got.Header.Get(k); v != want {
 			t.Errorf("%s = %q, want %q", k, v, want)
@@ -437,6 +439,21 @@ func TestSendRequestShape(t *testing.T) {
 	}
 	if rs := binary.BigEndian.Uint32(body[saltLen : saltLen+4]); rs != recordSize {
 		t.Errorf("rs = %d", rs)
+	}
+}
+
+func TestTopicOf(t *testing.T) {
+	for tag, want := range map[string]string{
+		"channel-7":             "channel-7",
+		"":                      "",
+		"has space":             "",
+		"has:colon":             "",
+		strings.Repeat("x", 32): strings.Repeat("x", 32),
+		strings.Repeat("x", 33): "",
+	} {
+		if got := topicOf(tag); got != want {
+			t.Errorf("topicOf(%q) = %q, want %q", tag, got, want)
+		}
 	}
 }
 
