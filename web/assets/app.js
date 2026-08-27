@@ -2242,7 +2242,26 @@ function blockedOffline(what) {
   return true;
 }
 
+// A dropped stream usually comes right back — a phone waking from its pocket
+// reconnects in a second or two. Flashing "Reconnecting…" over that blink is
+// noise, so going offline waits out a grace period; coming back is instant.
+// Two cases skip the wait: the browser itself says the network is gone, and a
+// banner that is already up (only its label may need refreshing).
+let offlineUITimer = 0;
+const offlineUIGrace = 4000;
+
 function setOffline(off) {
+  clearTimeout(offlineUITimer);
+  if (!off) { applyOfflineUI(false); return; }
+  const banner = byId('connection-banner');
+  if (navigator.onLine === false || (banner && !banner.hidden)) {
+    applyOfflineUI(true);
+    return;
+  }
+  offlineUITimer = setTimeout(() => applyOfflineUI(true), offlineUIGrace);
+}
+
+function applyOfflineUI(off) {
   const app = byId('app');
   if (app) app.classList.toggle('is-offline', off);
   const banner = byId('connection-banner');
