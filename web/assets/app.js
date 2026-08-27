@@ -987,7 +987,15 @@ async function gapFill(channelId) {
   maybeMarkRead();
 }
 
-const chanBack = []; // previously visited channel ids, most recent last
+// Every entry we create carries the channel it stands for, so popstate can
+// restore one without parsing the URL. `guard` marks the throwaway entry the
+// phone back button eats before it is allowed to leave the app.
+function markHistory(channelId, replace, guard) {
+  const entry = { slock: 1, c: channelId, guard: guard || undefined };
+  const url = '/?c=' + channelId;
+  if (replace) history.replaceState(entry, '', url);
+  else history.pushState(entry, '', url);
+}
 
 async function openChannel(channelId, opts = {}) {
   channelId = Number(channelId);
@@ -1005,16 +1013,12 @@ async function openChannel(channelId, opts = {}) {
     saveDraftFor(prevId); // keep whatever was typed (edits included) —
     persistDrafts();      // also when re-opening the same channel
   }
-  // Trail for the phone back button (see wireBackButton); walking back must
-  // not extend the trail.
-  if (prevId && prevId !== channelId && !opts.fromBack) {
-    chanBack.push(prevId);
-    if (chanBack.length > 20) chanBack.shift();
-  }
   state.currentId = channelId;
   resetComposerMode();
   localStorage.setItem(LS.lastChannel, String(channelId));
-  history.replaceState(null, '', '/?c=' + channelId);
+  // A real swap earns a history entry, so back walks the channels visited.
+  // Re-opening the same channel, or arriving from popstate, must not.
+  if (!opts.fromHistory) markHistory(channelId, !prevId || prevId === channelId);
   document.body.classList.remove('nav-open');
   closeEmojiPicker();
 
@@ -4973,29 +4977,34 @@ function wireKeyboard() {
   });
 }
 
-// Phone / installed-PWA back button: back closes whatever is open (lightbox,
-// palette, modal, menu, drawer), then walks back through visited channels, and
-// only a second press with nothing left actually leaves the app. Desktop
-// browsers keep their native back untouched.
+// Back walks the channels you visited, on every platform: each swap pushed an
+// entry, so popstate just re-opens the one it lands on. On phones and the
+// installed PWA back doubles as the app's back button, so it closes whatever
+// is open (lightbox, palette, modal, menu, drawer) before it moves, and only a
+// second press with nothing left actually leaves.
 function wireBackButton() {
-  const standalone = matchMedia('(display-mode: standalone)').matches;
-  if (!standalone && !matchMedia('(max-width: 760px)').matches) return;
-  const trap = () => history.pushState({ slock: 1 }, '');
-  trap();
-  window.addEventListener('popstate', () => {
-    const closedSomething = (emojiPickerEl && (closeEmojiPicker(), true))
-      || closeLightbox() || closePalette() || closeTopModal() || closeMeMenu()
-      || (document.body.classList.contains('nav-open')
-        && (document.body.classList.remove('nav-open'), true));
-    if (closedSomething) { trap(); return; }
-    const prev = chanBack.pop();
-    if (prev && state.channels.has(prev)) {
-      openChannel(prev, { fromBack: true });
-      trap();
+  const guarded = matchMedia('(display-mode: standalone)').matches
+    || matchMedia('(max-width: 760px)').matches;
+  const trap = () => { if (state.currentId) markHistory(state.currentId, false, true); };
+  if (guarded) trap();
+  window.addEventListener('popstate', (e) => {
+    if (guarded) {
+      const closedSomething = (emojiPickerEl && (closeEmojiPicker(), true))
+        || closeLightbox() || closePalette() || closeTopModal() || closeMeMenu()
+        || (document.body.classList.contains('nav-open')
+          && (document.body.classList.remove('nav-open'), true));
+      // Put back the entry that press consumed, so the trail stays put.
+      if (closedSomething) { trap(); return; }
+    }
+    const id = Number((e.state && e.state.c)
+      || new URLSearchParams(location.search).get('c'));
+    if (id && id !== state.currentId && state.channels.has(id)) {
+      openChannel(id, { fromHistory: true });
       return;
     }
-    // Nothing left to close or revisit. We are now past our trap entry: one
-    // more press within the window leaves for real; staying re-arms the trap.
+    // Nowhere left to go. Desktop lets the browser leave; on a phone one more
+    // press within the window leaves for real, and staying re-arms the trap.
+    if (!guarded) return;
     toast('Back again to leave slock');
     setTimeout(trap, 1500);
   });
@@ -5193,7 +5202,6 @@ async function boot() {
   wireKeyboard();
   wireVisibility();
   wireSwipe();
-  wireBackButton();
   wireSidebarResize();
 
   // Workspace identity, in parallel and non-blocking: the built-in mark and
@@ -5234,6 +5242,9 @@ async function boot() {
   }
   const jumpTo = Number(params.get('m')) || 0;
   if (target) await openChannel(target, jumpTo ? { jumpTo } : {});
+  // After the first channel: the trail starts at a real entry, and the phone
+  // trap needs a channel to name.
+  wireBackButton();
 
   connectSSE();
   await registerSW();
