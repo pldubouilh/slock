@@ -4750,14 +4750,14 @@ async function toggleNotifications() {
 function wireMessageList() {
   const list = byId('message-list');
   const sc = byId('message-scroll');
-  let scrollHoverTimer = 0;
   if (sc) {
     sc.addEventListener('scroll', () => {
-      // Touch scrolling drags a finger across rows; suppress hover while the
-      // list is actually moving so nothing lights up under it.
+      // Scrolling slides rows under a stationary pointer (or a dragging
+      // finger); suppress hover so nothing lights up under it. The class
+      // stays until the pointer genuinely moves again — see below — so
+      // stopping the scroll does not re-select whatever landed under the
+      // cursor.
       sc.classList.add('is-scrolling');
-      clearTimeout(scrollHoverTimer);
-      scrollHoverTimer = setTimeout(() => sc.classList.remove('is-scrolling'), 140);
       // A tapped row keeps :focus-within (its action toolbar, on phones)
       // until something else is tapped — scrolling away deselects it.
       const focused = document.activeElement;
@@ -4770,6 +4770,19 @@ function wireMessageList() {
       updateJumpLatest();
       if (sc.scrollTop < 240 && state.currentId) loadOlder(state.currentId);
     }, { passive: true });
+    // Re-arm hover only on real pointer movement. Chrome re-dispatches a
+    // synthetic mousemove at the old coordinates after a scroll to refresh
+    // hover targets; a same-position event must not count as movement.
+    let lastMX = -1, lastMY = -1;
+    sc.addEventListener('mousemove', (e) => {
+      if (e.clientX === lastMX && e.clientY === lastMY) return;
+      lastMX = e.clientX;
+      lastMY = e.clientY;
+      sc.classList.remove('is-scrolling');
+    });
+    // On touch there is no hover to re-arm, but a deliberate tap must land on
+    // a live row (the class turns off pointer events for the whole list).
+    sc.addEventListener('touchstart', () => sc.classList.remove('is-scrolling'), { passive: true });
   }
   if (!list) return;
 

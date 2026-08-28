@@ -767,10 +767,12 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   .msg:hover { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
 }
 
-/* while the list is moving, the finger (or wheel) dragging past rows must not
-   light them up — JS holds .is-scrolling on #message-scroll during scroll */
-#message-scroll.is-scrolling .msg:hover { background: transparent; }
-#message-scroll.is-scrolling .msg-actions { opacity: 0 !important; pointer-events: none; }
+/* while the list is moving, rows must not react to the pointer at all — no
+   hover tint, no action toolbar, no text selection starting mid-scroll. JS
+   sets .is-scrolling on #message-scroll during scroll and keeps it until the
+   pointer genuinely moves again, so stopping a scroll does not re-select
+   whatever row slid under the cursor. */
+#message-scroll.is-scrolling #message-list { pointer-events: none; }
 .msg:focus-visible { outline: none; }
 
 .msg-avatar {
