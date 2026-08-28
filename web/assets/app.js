@@ -2251,14 +2251,29 @@ let offlineUITimer = 0;
 const offlineUIGrace = 4000;
 
 function setOffline(off) {
-  clearTimeout(offlineUITimer);
-  if (!off) { applyOfflineUI(false); return; }
+  if (!off) {
+    clearTimeout(offlineUITimer);
+    offlineUITimer = 0;
+    applyOfflineUI(false);
+    return;
+  }
   const banner = byId('connection-banner');
   if (navigator.onLine === false || (banner && !banner.hidden)) {
+    clearTimeout(offlineUITimer);
+    offlineUITimer = 0;
     applyOfflineUI(true);
     return;
   }
-  offlineUITimer = setTimeout(() => applyOfflineUI(true), offlineUIGrace);
+  // Hidden: paint nothing — the stream dies in the background on phones, and
+  // a banner (or a grace clock) started back there would greet the user
+  // already expired; wireVisibility restarts the grace on return. Armed: let
+  // the running timer stand, otherwise every backoff retry would reset it and
+  // a real outage could dodge the banner for ages.
+  if (document.hidden || offlineUITimer) return;
+  offlineUITimer = setTimeout(() => {
+    offlineUITimer = 0;
+    if (!document.hidden) applyOfflineUI(true);
+  }, offlineUIGrace);
 }
 
 function applyOfflineUI(off) {
@@ -5057,10 +5072,16 @@ function reportVisibility() {
 function wireVisibility() {
   document.addEventListener('visibilitychange', () => {
     reportVisibility();
-    if (document.hidden) return;
+    if (document.hidden) {
+      // A grace clock must not tick while nobody is looking (see setOffline).
+      clearTimeout(offlineUITimer);
+      offlineUITimer = 0;
+      return;
+    }
     if (!state.connected) {
       clearTimeout(reconnectTimer);
       backoffMs = 1000;
+      setOffline(true); // grace restarts now, with the user watching
       connectSSE();
     } else {
       refetchChannels();
