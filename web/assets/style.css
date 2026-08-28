@@ -1261,7 +1261,7 @@ body.density-compact .msg--compact .msg-head { display: none; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 35px;
+  width: 33px;
   height: 30px;
   border-radius: var(--r-s);
   background: var(--accent-bg);
