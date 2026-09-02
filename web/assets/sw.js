@@ -238,10 +238,35 @@ self.addEventListener('push', (event) => {
     data: { url: data.url || '/' },
   };
   event.waitUntil((async () => {
-    await self.registration.showNotification(title, options);
-    if ('setAppBadge' in navigator && typeof data.badge === 'number') {
+    let badge = typeof data.badge === 'number' ? data.badge : null;
+    let show = true;
+    // A push can land hours after it was sent: the phone was unreachable and
+    // the push service queued it (the server keeps only the newest per
+    // channel via the Topic header, but cannot retract even that). Delivery
+    // is the only place left to drop stale ones — if the channel has been
+    // read meanwhile, on any device, showing this now is pure noise. The
+    // fresh channel list also corrects the badge, whose payload value is as
+    // old as the message. Any failure (offline, slow, signed out) falls back
+    // to showing; deliberate skips are rare enough to stay within Chrome's
+    // silent-push allowance.
+    if (data.channel_id) {
       try {
-        if (data.badge > 0) await navigator.setAppBadge(data.badge);
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 3000);
+        const resp = await fetch('/api/channels', { signal: ctl.signal });
+        clearTimeout(timer);
+        if (resp.ok) {
+          const chans = (await resp.json()).channels || [];
+          const ch = chans.find((c) => c.id === data.channel_id);
+          if (ch && !ch.unread_count) show = false;
+          badge = chans.reduce((n, c) => n + (c.unread_count || 0), 0);
+        }
+      } catch { /* can't tell — show it */ }
+    }
+    if (show) await self.registration.showNotification(title, options);
+    if ('setAppBadge' in navigator && badge !== null) {
+      try {
+        if (badge > 0) await navigator.setAppBadge(badge);
         else await navigator.clearAppBadge();
       } catch { /* unsupported */ }
     }

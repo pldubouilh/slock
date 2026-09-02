@@ -145,10 +145,11 @@ func (s *Server) notifyNewMessage(_ context.Context, msg *db.Message, ch *db.Cha
 	channelID := strconv.FormatInt(ch.ID, 10)
 	for _, uid := range recipients {
 		n := push.Notification{
-			Title: title,
-			Body:  body,
-			Tag:   "channel-" + channelID,
-			URL:   "/?c=" + channelID,
+			Title:     title,
+			Body:      body,
+			Tag:       "channel-" + channelID,
+			URL:       "/?c=" + channelID,
+			ChannelID: ch.ID,
 		}
 		// Connected somewhere (a hidden tab, a locked phone with the PWA
 		// open): they are likely about to read this where they are, and a

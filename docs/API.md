@@ -267,10 +267,15 @@ when it expires, the push is dropped — it cannot be retracted once sent. A
 newer message in the channel replaces the held payload without extending the
 deadline. Members with no connection at all are pushed immediately. Held
 pushes do not survive a server restart. Payload delivered to the service
-worker: `{title, body, tag, url, badge}` where `url` is `/?c=<channel_id>` and
-`badge` is that user's total unread count, computed at delivery time. Requests
-to the push service carry `Urgency: high` and `Topic: channel-<id>`, so an
-unreachable device wakes to at most one queued notification per channel.
+worker: `{title, body, tag, url, badge, channel_id}` where `url` is
+`/?c=<channel_id>` and `badge` is that user's total unread count at send time.
+Requests to the push service carry `Urgency: high` and `Topic: channel-<id>`,
+so an unreachable device wakes to at most one queued notification per channel.
+A push may still be delivered hours after it was sent and cannot be retracted,
+so the service worker makes the final call: on delivery it fetches the channel
+list, drops the notification if the channel has been read meanwhile, and
+recomputes the app badge from the fresh unread counts (falling back to showing
+the notification with the payload badge when the check fails).
 
 ## External send API
 

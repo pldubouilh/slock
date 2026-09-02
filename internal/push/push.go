@@ -41,6 +41,11 @@ type Notification struct {
 	Tag   string `json:"tag"`
 	URL   string `json:"url"`
 	Badge int    `json:"badge"`
+	// ChannelID lets the service worker check, at delivery time, whether the
+	// channel is still unread. A push can land hours after it was sent (the
+	// phone was unreachable and the push service queued it) and cannot be
+	// retracted; the receiving end is the only place left to drop stale ones.
+	ChannelID int64 `json:"channel_id,omitempty"`
 }
 
 // Pusher signs and encrypts Web Push requests. Zero value is disabled.
