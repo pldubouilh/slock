@@ -127,6 +127,12 @@
         <button id="close-dm-btn" class="iconbtn" type="button" aria-label="Close conversation" title="Close conversation" hidden>
           <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
         </button>
+        <!-- phones only (CSS): the icon row collapses into this one button; the
+             menu mirrors whichever action buttons are live for the channel -->
+        <button id="header-more" class="iconbtn" type="button" aria-label="Channel actions" title="Channel actions" aria-haspopup="menu" aria-controls="header-menu">
+          <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="4.5" cy="10" r="0.9"/><circle cx="10" cy="10" r="0.9"/><circle cx="15.5" cy="10" r="0.9"/></svg>
+        </button>
+        <div id="header-menu" role="menu" aria-label="Channel actions" hidden></div>
       </div>
     </header>
 

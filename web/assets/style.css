@@ -64,7 +64,6 @@
   --sp-5: 24px;
   --sp-6: 32px;
   --sidebar-w: 264px;
-  --nav-drag: 0;      /* 0 closed → 1 open; JS sets it on <body> during a swipe */
 
   /* type */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
@@ -719,6 +718,7 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 #channel-topic:empty { display: none; }
 
 #channel-actions {
+  position: relative; /* anchors #header-menu */
   margin-inline-start: auto;
   display: flex;
   align-items: center;
@@ -727,6 +727,39 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 
 /* muted state shows the slashed bell, dimmed like the muted sidebar rows */
 #mute-btn[aria-pressed="true"] { opacity: 0.55; }
+
+/* phones: the icon row eats the channel title, so it collapses into one "⋯"
+   button (see the max-width media query) whose menu lists the live actions.
+   Same dress as #me-menu, anchored under the header's right edge. */
+#header-more { display: none; }
+#header-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  inset-inline-end: 0;
+  z-index: 70;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-m);
+  box-shadow: var(--shadow-2);
+  animation: rise-in var(--t-fast) var(--ease);
+}
+#header-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--r-s);
+  font-size: 15.5px;
+  color: var(--text-1);
+  text-align: start;
+}
+#header-menu button:hover { background: var(--bg-2); }
+#header-menu button svg { color: var(--text-3); }
 
 /* ==========================================================================
    messages — the product
@@ -2395,6 +2428,24 @@ body.auth-page {
   #main {
 	  box-shadow: none;
   }
+
+  /* The header's icon row collapses into the single #header-more button; its
+     menu clones whichever of these are live. Join stays: it is the primary
+     action for a non-member and must not hide behind a "⋯". */
+  #channel-actions > .iconbtn { display: none; }
+  #channel-actions > #header-more { display: inline-flex; }
+
+  /* Long filenames: on a phone there is no room for a useful ellipsis, so
+     wrap instead. `anywhere` because filenames are single unbroken tokens —
+     it also caps their min-content width, so no layout can be pushed into a
+     horizontal scroll by one. Covers the in-chat card and the files modal;
+     the composer tray chips stay ellipsized (hard 180px cap already). */
+  .att-file { max-width: 100%; }
+  .att-file-name,
+  .frow-name {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
   #sidebar {
     position: fixed;
     top: 0;
@@ -2419,23 +2470,20 @@ body.auth-page {
     box-shadow: var(--shadow-2);
   }
 
-  /* swipe: while .nav-dragging is set the drawer tracks --nav-drag directly.
-     At 0 it matches the closed transform, at 1 the .nav-open one (none),
-     so releasing into either state never jumps. */
+  /* swipe: while .nav-dragging is set, JS writes the drawer's transform and
+     the backdrop's opacity inline each frame (0 matches the closed transform,
+     1 the .nav-open one, so releasing into either state never jumps);
+     transitions pause so those writes land instantly. will-change keeps the
+     drawer on its own compositor layer for the first frame of the drag. */
   body.nav-dragging #sidebar {
     transition: none;
     box-shadow: var(--shadow-2);
-  }
-  body.side-left.nav-dragging #sidebar {
-    transform: translateX(calc((1 - var(--nav-drag)) * -100%));
-  }
-  body.side-right.nav-dragging #sidebar {
-    transform: translateX(calc((1 - var(--nav-drag)) * 100%));
+    will-change: transform;
   }
   body.nav-dragging .nav-backdrop {
     transition: none;
-    opacity: var(--nav-drag);
     pointer-events: auto;
+    will-change: opacity;
   }
   body.side-right .side-foot { padding-inline-end: calc(var(--sp-2) + env(safe-area-inset-right, 0px)); }
   body.side-left .side-foot { padding-inline-start: calc(var(--sp-2) + env(safe-area-inset-left, 0px)); }

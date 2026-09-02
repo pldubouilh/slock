@@ -57,7 +57,12 @@ strings, so the templates are where message/row structure lives.
                       #close-dm-btn (DMs only: hides the conversation from
                       the rail on this device — localStorage
                       ["slock:closed-dms"], purely visual, server untouched;
-                      a new message or reopening via the palette restores it)
+                      a new message or reopening via the palette restores it),
+                      #header-more + #header-menu (phones only, via CSS: the
+                      icon row collapses into one "⋯" button; the menu is
+                      rebuilt at open time by cloning the non-hidden action
+                      buttons — icon, title, click handler — so it always
+                      matches the channel; #join-btn stays outside it)
     #message-scroll         the scroll container
       #message-loader       "loading older messages" spinner, JS toggles [hidden]
       #message-list         messages go here, oldest first

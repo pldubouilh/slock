@@ -1021,6 +1021,7 @@ async function openChannel(channelId, opts = {}) {
   if (!opts.fromHistory) markHistory(channelId, !prevId || prevId === channelId);
   document.body.classList.remove('nav-open');
   closeEmojiPicker();
+  closeHeaderMenu();
 
   renderSidebar();
   renderChannelHeader();
@@ -4880,7 +4881,42 @@ function wireSidebar() {
     document.body.classList.remove('nav-open'));
 }
 
+function closeHeaderMenu() {
+  const menu = byId('header-menu');
+  if (menu && !menu.hidden) { menu.hidden = true; return true; }
+  return false;
+}
+
+// The phone "⋯" menu is built at open time by mirroring the live header
+// buttons — same icon, same label, same handler — so it always matches the
+// current channel (DM vs channel, muted or not) with zero bookkeeping.
+function openHeaderMenu() {
+  const menu = byId('header-menu');
+  if (!menu) return;
+  menu.textContent = '';
+  for (const btn of document.querySelectorAll('#channel-actions > .iconbtn')) {
+    if (btn.hidden || btn.id === 'header-more') continue;
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.setAttribute('role', 'menuitem');
+    const svg = [...btn.querySelectorAll('svg')].find((s) => !s.hidden);
+    if (svg) item.append(svg.cloneNode(true));
+    item.append(document.createTextNode(btn.title || btn.getAttribute('aria-label') || ''));
+    item.addEventListener('click', () => { closeHeaderMenu(); btn.click(); });
+    menu.append(item);
+  }
+  menu.hidden = !menu.childElementCount;
+}
+
 function wireHeader() {
+  on(byId('header-more'), 'click', (e) => {
+    e.stopPropagation();
+    if (!closeHeaderMenu()) openHeaderMenu();
+  });
+  document.addEventListener('click', (e) => {
+    const menu = byId('header-menu');
+    if (menu && !menu.hidden && !menu.contains(e.target)) closeHeaderMenu();
+  });
   on(byId('join-btn'), 'click', async () => {
     const ch = state.channels.get(state.currentId);
     if (!ch) return;
@@ -5009,6 +5045,7 @@ function wireKeyboard() {
       if (closeLightbox()) return;
       if (closeTopModal()) return;
       if (closeMeMenu()) return;
+      if (closeHeaderMenu()) return;
       const ta = byId('composer-input');
       if (ta && document.activeElement === ta) {
         if (state.editingId) cancelEdit();
@@ -5038,6 +5075,7 @@ function wireBackButton() {
     if (guarded) {
       const closedSomething = (emojiPickerEl && (closeEmojiPicker(), true))
         || closeLightbox() || closePalette() || closeTopModal() || closeMeMenu()
+        || closeHeaderMenu()
         || (document.body.classList.contains('nav-open')
           && (document.body.classList.remove('nav-open'), true));
       // Put back the entry that press consumed, so the trail stays put.
@@ -5118,9 +5156,9 @@ function wireVisibility() {
 
 function wireSwipe() {
   const mq = matchMedia('(max-width: 760px)');
-  const EDGE = 24;      // px from the screen edge that can start an open
-  const CLAIM_DX = 10;  // horizontal movement before we claim the gesture
-  const FLICK = 0.3;    // px/ms — faster than this decides by direction
+  const OPEN_ZONE = 0.5; // fraction of the screen, from the drawer's edge, that can start an open
+  const CLAIM_DX = 10;   // horizontal movement before we claim the gesture
+  const FLICK = 0.3;     // px/ms — faster than this decides by direction
 
   let gesture = null; // {x, y, mode, claimed, width, lastX, lastT, vx, p}
 
@@ -5147,9 +5185,23 @@ function wireSwipe() {
     return Math.max(0, Math.min(1, p));
   };
 
+  // Inline styles on the two moving elements, not a custom property on body:
+  // a body-level property inherits everywhere, so flipping it every touchmove
+  // restyled the whole document — message list included — and the drawer
+  // stuttered. Scoped writes keep each frame on the compositor.
+  const paint = (p) => {
+    const sb = byId('sidebar');
+    if (sb) sb.style.transform = `translateX(${(1 - p) * (sideRight() ? 100 : -100)}%)`;
+    const bd = document.querySelector('.nav-backdrop');
+    if (bd) bd.style.opacity = String(p);
+  };
+
   const settle = (open) => {
     document.body.classList.remove('nav-dragging');
-    document.body.style.removeProperty('--nav-drag'); // CSS transition finishes it
+    const sb = byId('sidebar');
+    if (sb) sb.style.removeProperty('transform'); // CSS transition finishes it
+    const bd = document.querySelector('.nav-backdrop');
+    if (bd) bd.style.removeProperty('opacity');
     document.body.classList.toggle('nav-open', open);
     if (open) dismissKeyboard(); // sliding the menu over a focused composer
     gesture = null;
@@ -5164,8 +5216,10 @@ function wireSwipe() {
     let mode = null;
     if (open) {
       mode = 'close'; // anywhere over the drawer or its scrim
-    } else if (sideRight() ? t.clientX >= innerWidth - EDGE : t.clientX <= EDGE) {
-      mode = 'open';
+    } else if (sideRight()
+      ? t.clientX >= innerWidth * (1 - OPEN_ZONE)
+      : t.clientX <= innerWidth * OPEN_ZONE) {
+      mode = 'open'; // the claim logic keeps vertical scrolls safe mid-screen
     }
     if (!mode || startsOnHScroll(e.target)) return;
     gesture = {
@@ -5199,7 +5253,7 @@ function wireSwipe() {
     gesture.lastX = t.clientX;
     gesture.lastT = e.timeStamp;
     gesture.p = progressFor(dx);
-    document.body.style.setProperty('--nav-drag', String(gesture.p));
+    paint(gesture.p);
   }, { passive: false });
 
   const onTouchEnd = () => {
