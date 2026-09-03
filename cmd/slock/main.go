@@ -126,6 +126,7 @@ func run() error {
 	}
 
 	srv := api.New(cfg, database, realtime.NewHub(), store, mailer, pusher)
+	srv.StartPushWorker(ctx) // drains queued web pushes; stops with the process
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,

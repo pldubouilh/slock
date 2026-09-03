@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -97,14 +96,19 @@ func validPushEndpoint(endpoint string) bool {
 	return strings.HasPrefix(endpoint, "https://") && len(endpoint) <= maxEndpointLen
 }
 
-// notifyNewMessage sends web push for a new message to every channel member who
-// has no visible tab (per Hub.HasVisible), is not the author, and has not muted
-// the channel. Merely being connected is not enough to suppress push: a
-// backgrounded tab keeps its SSE stream open, and skipping "online" users meant
-// one forgotten desktop tab silenced every device — but it is enough to buy a
-// grace period (pushGrace) in which reading the message anywhere cancels the
-// push. It runs on its own background context because the request that
-// triggered it is already finished.
+// notifyNewMessage queues web push for a new message to every channel member
+// who has no visible tab (per Hub.HasVisible), is not the author, and has not
+// muted the channel. Merely being connected is not enough to suppress push: a
+// backgrounded tab keeps its SSE stream open, and skipping "online" users
+// meant one forgotten desktop tab silenced every device — but it is enough to
+// buy a grace period (pushGrace) in which reading the message anywhere
+// cancels the push. Nothing is sent here: pushes become push_queue rows and
+// the worker (drainPushQueue) delivers them, so grace holds survive a restart
+// and failed sends can retry. One row per (user, channel) is the coalescing
+// rule — a newer message replaces a pending row's payload but keeps its
+// deadline, so a busy channel cannot defer its notification forever. It runs
+// on its own background context because the request that triggered it is
+// already finished.
 func (s *Server) notifyNewMessage(_ context.Context, msg *db.Message, ch *db.Channel, author *db.User) {
 	if !s.Pusher.Enabled() || msg == nil || ch == nil || author == nil {
 		return
@@ -141,104 +145,203 @@ func (s *Server) notifyNewMessage(_ context.Context, msg *db.Message, ch *db.Cha
 		return
 	}
 
-	title, body := pushText(msg, ch, author)
-	channelID := strconv.FormatInt(ch.ID, 10)
+	queued := false
 	for _, uid := range recipients {
-		n := push.Notification{
+		// Connected somewhere (a hidden tab, a locked phone with the PWA
+		// open): they are likely about to read this where they are, and a
+		// sent push cannot be taken back — grant the grace period. No
+		// connection at all: due immediately.
+		delay := time.Duration(0)
+		if s.Hub.IsOnline(uid) {
+			delay = pushGrace
+		}
+		_, err := s.DB.Pool.Exec(ctx,
+			`INSERT INTO push_queue (user_id, channel_id, message_id, deliver_after)
+			 VALUES ($1, $2, $3, now() + make_interval(secs => $4))
+			 ON CONFLICT (user_id, channel_id) DO UPDATE
+			   SET message_id = EXCLUDED.message_id`,
+			uid, ch.ID, msg.ID, delay.Seconds())
+		if err != nil {
+			log.Printf("api: queue push for user %d: %v", uid, err)
+			continue
+		}
+		queued = true
+	}
+	if queued {
+		s.kickPushWorker()
+	}
+}
+
+// StartPushWorker launches the goroutine that drains push_queue: every tick
+// (or sooner, when kicked after an enqueue) it claims due rows and delivers
+// them. FOR UPDATE SKIP LOCKED in the claim makes concurrent workers — other
+// server instances against the same database — safe: a row is delivered once.
+func (s *Server) StartPushWorker(ctx context.Context) {
+	if !s.Pusher.Enabled() {
+		return
+	}
+	s.pushKick = make(chan struct{}, 1)
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			case <-s.pushKick:
+			}
+			s.drainPushQueue(ctx)
+		}
+	}()
+}
+
+// kickPushWorker nudges the worker to run now instead of at the next tick, so
+// a push to a fully offline user is not held for up to a tick. Non-blocking:
+// a pending kick already covers this one.
+func (s *Server) kickPushWorker() {
+	if s.pushKick == nil {
+		return
+	}
+	select {
+	case s.pushKick <- struct{}{}:
+	default:
+	}
+}
+
+const (
+	pushClaimBatch  = 50
+	pushMaxAttempts = 5
+)
+
+// drainPushQueue claims and delivers due rows until the queue has no more.
+func (s *Server) drainPushQueue(ctx context.Context) {
+	for {
+		n, err := s.deliverDuePushes(ctx)
+		if err != nil {
+			log.Printf("api: push queue: %v", err)
+			return
+		}
+		if n < pushClaimBatch {
+			return
+		}
+	}
+}
+
+// deliverDuePushes claims one batch of due rows (deleting them — failures are
+// re-queued explicitly) and sends each after re-checking that it still makes
+// sense: the recipient is not looking at slock, has not read the channel past
+// the message on any device, is still a member, and the message still exists
+// undeleted. The payload is rendered fresh from the database, so edits,
+// renames and deletions between enqueue and delivery are honoured.
+func (s *Server) deliverDuePushes(ctx context.Context) (int, error) {
+	rows, err := s.DB.Pool.Query(ctx,
+		`DELETE FROM push_queue
+		  WHERE (user_id, channel_id) IN (
+		        SELECT user_id, channel_id FROM push_queue
+		         WHERE deliver_after <= now()
+		         ORDER BY deliver_after
+		         LIMIT $1
+		           FOR UPDATE SKIP LOCKED)
+		  RETURNING user_id, channel_id, message_id, attempts`, pushClaimBatch)
+	if err != nil {
+		return 0, err
+	}
+	type due struct {
+		userID, channelID, msgID int64
+		attempts                 int16
+	}
+	var claimed []due
+	for rows.Next() {
+		var d due
+		if err := rows.Scan(&d.userID, &d.channelID, &d.msgID, &d.attempts); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		claimed = append(claimed, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+
+	for _, d := range claimed {
+		if s.Hub.HasVisible(d.userID) {
+			continue
+		}
+		var lastRead int64
+		err := s.DB.Pool.QueryRow(ctx,
+			`SELECT last_read_message_id FROM channel_members
+			  WHERE channel_id = $1 AND user_id = $2`, d.channelID, d.userID).Scan(&lastRead)
+		if err != nil {
+			if !isNoRows(err) { // no rows: no longer a member, push is moot
+				log.Printf("api: push read check for user %d: %v", d.userID, err)
+			}
+			continue
+		}
+		if lastRead >= d.msgID {
+			continue
+		}
+
+		var msg db.Message
+		var ch db.Channel
+		var author db.User
+		err = s.DB.Pool.QueryRow(ctx,
+			`SELECT m.id, m.channel_id, m.user_id, m.body, m.created_at,
+			        c.kind, c.name, u.display_name
+			   FROM messages m
+			   JOIN channels c ON c.id = m.channel_id
+			   JOIN users u ON u.id = m.user_id
+			  WHERE m.id = $1 AND m.deleted_at IS NULL`, d.msgID).
+			Scan(&msg.ID, &msg.ChannelID, &msg.UserID, &msg.Body, &msg.CreatedAt,
+				&ch.Kind, &ch.Name, &author.DisplayName)
+		if err != nil {
+			if !isNoRows(err) { // no rows: deleted before delivery, say nothing
+				log.Printf("api: push load message %d: %v", d.msgID, err)
+			}
+			continue
+		}
+		ch.ID = d.channelID
+
+		title, body := pushText(&msg, &ch, &author)
+		channelID := strconv.FormatInt(d.channelID, 10)
+		delivered := s.pushToUser(ctx, d.userID, push.Notification{
 			Title:     title,
 			Body:      body,
 			Tag:       "channel-" + channelID,
 			URL:       "/?c=" + channelID,
-			ChannelID: ch.ID,
+			ChannelID: d.channelID,
+			Badge:     s.unreadTotal(ctx, d.userID),
+		})
+		if !delivered && d.attempts+1 < pushMaxAttempts {
+			// Transient push-service failure: back off exponentially. DO
+			// NOTHING on conflict — a newer message re-queued this channel
+			// meanwhile, and that row supersedes this one.
+			backoff := (time.Duration(30<<d.attempts) * time.Second).Seconds()
+			_, err := s.DB.Pool.Exec(ctx,
+				`INSERT INTO push_queue (user_id, channel_id, message_id, deliver_after, attempts)
+				 VALUES ($1, $2, $3, now() + make_interval(secs => $4), $5)
+				 ON CONFLICT (user_id, channel_id) DO NOTHING`,
+				d.userID, d.channelID, d.msgID, backoff, d.attempts+1)
+			if err != nil {
+				log.Printf("api: requeue push for user %d: %v", d.userID, err)
+			}
 		}
-		// Connected somewhere (a hidden tab, a locked phone with the PWA
-		// open): they are likely about to read this where they are, and a
-		// sent push cannot be taken back. Hold it; deliverPending re-checks
-		// before it fires. No connection at all: send now.
-		if s.Hub.IsOnline(uid) {
-			s.pending.hold(uid, ch.ID, msg.ID, n, pushGrace, s.deliverPending)
-		} else {
-			n.Badge = s.unreadTotal(ctx, uid)
-			s.pushToUser(ctx, uid, n)
-		}
 	}
-}
-
-// deliverPending fires when a held push's grace expires: it drops the push if
-// the recipient has read the channel past the message in the meantime (on any
-// device), or is now actively looking at slock; otherwise it sends.
-func (s *Server) deliverPending(userID, channelID, msgID int64, n push.Notification) {
-	if s.Hub.HasVisible(userID) {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), pushSendTimeout)
-	defer cancel()
-	var lastRead int64
-	err := s.DB.Pool.QueryRow(ctx,
-		`SELECT last_read_message_id FROM channel_members
-		  WHERE channel_id = $1 AND user_id = $2`, channelID, userID).Scan(&lastRead)
-	if err != nil {
-		// Not a member any more: the push is moot. Any other failure: deliver
-		// anyway — a duplicate-ish notification beats a silently dropped one.
-		if isNoRows(err) {
-			return
-		}
-		log.Printf("api: pending push read check for user %d: %v", userID, err)
-	}
-	if lastRead >= msgID {
-		return
-	}
-	n.Badge = s.unreadTotal(ctx, userID)
-	s.pushToUser(ctx, userID, n)
-}
-
-// pendingPushes holds one delayed push per (user, channel). A newer message in
-// the same channel replaces the payload but keeps the original deadline, so a
-// busy channel cannot defer its notification forever; the newest body winning
-// mirrors what the Topic header does inside the push service's own queue.
-type pendingPushes struct {
-	mu sync.Mutex
-	m  map[[2]int64]*pendingPush
-}
-
-type pendingPush struct {
-	msgID int64
-	n     push.Notification
-	timer *time.Timer
-}
-
-func (p *pendingPushes) hold(userID, channelID, msgID int64, n push.Notification,
-	grace time.Duration, deliver func(userID, channelID, msgID int64, n push.Notification)) {
-	key := [2]int64{userID, channelID}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if pp, ok := p.m[key]; ok {
-		pp.msgID = msgID
-		pp.n = n
-		return
-	}
-	if p.m == nil {
-		p.m = make(map[[2]int64]*pendingPush)
-	}
-	pp := &pendingPush{msgID: msgID, n: n}
-	pp.timer = time.AfterFunc(grace, func() {
-		p.mu.Lock()
-		delete(p.m, key)
-		msgID, n := pp.msgID, pp.n
-		p.mu.Unlock()
-		deliver(userID, channelID, msgID, n)
-	})
-	p.m[key] = pp
+	return len(claimed), nil
 }
 
 // pushToUser delivers n to every browser the user has registered, dropping
-// subscriptions the push service reports as gone.
-func (s *Server) pushToUser(ctx context.Context, userID int64, n push.Notification) {
+// subscriptions the push service reports as gone. It reports false only when
+// there was something to deliver and every attempt failed transiently — the
+// one case a retry can help; no subscriptions, or only permanently dead ones,
+// is "done".
+func (s *Server) pushToUser(ctx context.Context, userID int64, n push.Notification) bool {
 	rows, err := s.DB.Pool.Query(ctx,
 		`SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = $1`, userID)
 	if err != nil {
 		log.Printf("api: load push subscriptions for user %d: %v", userID, err)
-		return
+		return false
 	}
 	type sub struct {
 		id int64
@@ -250,16 +353,17 @@ func (s *Server) pushToUser(ctx context.Context, userID int64, n push.Notificati
 		if err := rows.Scan(&v.id, &v.s.Endpoint, &v.s.P256DH, &v.s.Auth); err != nil {
 			rows.Close()
 			log.Printf("api: load push subscriptions for user %d: %v", userID, err)
-			return
+			return false
 		}
 		subs = append(subs, v)
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
 		log.Printf("api: load push subscriptions for user %d: %v", userID, err)
-		return
+		return false
 	}
 
+	failed := 0
 	for _, v := range subs {
 		err := s.Pusher.Send(ctx, v.s, n)
 		switch {
@@ -269,8 +373,10 @@ func (s *Server) pushToUser(ctx context.Context, userID int64, n push.Notificati
 		default:
 			log.Printf("api: web push to user %d: %v", userID, err)
 			_, _ = s.DB.Pool.Exec(ctx, `UPDATE push_subscriptions SET failed_at = now() WHERE id = $1`, v.id)
+			failed++
 		}
 	}
+	return failed == 0 || failed < len(subs)
 }
 
 // unreadTotal counts a user's unread messages across every channel they are in;

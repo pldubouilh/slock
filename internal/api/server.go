@@ -38,7 +38,7 @@ type Server struct {
 	Mailer *mail.Mailer
 	Pusher *push.Pusher
 
-	pending pendingPushes // grace-delayed web pushes, see notifyNewMessage
+	pushKick chan struct{} // nudges the push_queue worker, see StartPushWorker
 }
 
 func New(cfg Config, database *db.DB, hub *realtime.Hub, m *media.Store, mailer *mail.Mailer, pusher *push.Pusher) *Server {

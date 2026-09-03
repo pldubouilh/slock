@@ -654,6 +654,13 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) error {
 		}
 		return err
 	}
+	// Reading cancels any push still queued for this channel: this is the
+	// grace period doing its job. The worker re-checks read state at delivery
+	// anyway, so this is an optimisation, not the only guard.
+	_, _ = s.DB.Pool.Exec(r.Context(),
+		`DELETE FROM push_queue
+		  WHERE user_id = $1 AND channel_id = $2 AND message_id <= $3`,
+		me.ID, id, stored)
 	s.Hub.PublishUser(me.ID, realtime.Event{Type: "channel.read", Data: map[string]any{
 		"channel_id":           id,
 		"last_read_message_id": stored,

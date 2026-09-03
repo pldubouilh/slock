@@ -258,15 +258,19 @@ silently.
 | POST | `/api/push/subscribe` | `{endpoint, keys: {p256dh, auth}}` | `204` |
 | POST | `/api/push/unsubscribe` | `{endpoint}` | `204` |
 
-A push is sent for a new message to each member who has **no visible tab**
+A push is queued for a new message to each member who has **no visible tab**
 (per the SSE visibility flag above — merely being connected does not count),
-is not the author, and has not muted the channel. A member who is connected
-somewhere (hidden tab) gets a 5-minute grace period first: if they read the
-channel past the message on any device in that window, or have a visible tab
-when it expires, the push is dropped — it cannot be retracted once sent. A
-newer message in the channel replaces the held payload without extending the
-deadline. Members with no connection at all are pushed immediately. Held
-pushes do not survive a server restart. Payload delivered to the service
+is not the author, and has not muted the channel. Queued pushes are rows in
+`push_queue` (one per user+channel; a newer message replaces the row's
+payload without extending its deadline) drained by a background worker, so
+they survive restarts, retry with backoff on push-service failures, and are
+safe with multiple server instances (`FOR UPDATE SKIP LOCKED`). A member who
+is connected somewhere (hidden tab) gets a 5-minute grace period first:
+reading the channel past the message on any device cancels the row, and the
+worker re-checks read state, visibility, membership and message existence at
+delivery — an edit is delivered with fresh text, a deletion delivers nothing.
+Members with no connection at all are due immediately. Payload delivered to
+the service
 worker: `{title, body, tag, url, badge, channel_id}` where `url` is
 `/?c=<channel_id>` and `badge` is that user's total unread count at send time.
 Requests to the push service carry `Urgency: high` and `Topic: channel-<id>`,
