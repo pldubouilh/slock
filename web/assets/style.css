@@ -793,9 +793,9 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   padding: 5px var(--sp-4);
   transition: background var(--t-fast) var(--ease);
 }
-/* Hover only, and only on devices that really hover: the row carries
-   tabindex="-1" so a tap can reveal its actions, and on touch screens the
-   browser's emulated hover would leave the tint stuck on the last-tapped row. */
+/* Hover only, and only on devices that really hover: on touch screens the
+   browser's emulated hover would leave the tint stuck on the last-tapped row —
+   there, the long-press .msg--held state (further down) is the equivalent. */
 @media (hover: hover) {
   .msg:hover { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
 }
@@ -1253,7 +1253,8 @@ body.density-compact .msg--compact .msg-head { display: none; }
 .tray-item--error .tray-item-progress { opacity: 0.3; }
 
 .tray-item--done { border-color: var(--border); }
-.tray-item--done .tray-item-progress { opacity: 0.35; }
+/* the bar has said everything it had to say — a full gray bar just looks stuck */
+.tray-item--done .tray-item-progress { display: none; }
 .tray-item--done .tray-item-name { color: var(--text-2); }
 
 .composer-box {
@@ -2533,13 +2534,17 @@ body.auth-page {
   #lightbox-img { max-height: 70vh; max-height: 70dvh; }
 }
 
-/* Touch devices have no hover, so tapping a message (tabindex=-1) focuses it
-   and that is what reveals its actions. Scoped here so a mouse click on a
-   desktop never leaves anything switched on. */
+/* Touch devices have no hover, and a tap is deliberately a non-event: taps
+   and scroll-flicks land on messages constantly and must select nothing. A
+   long-press (JS sets .msg--held) is the one gesture that reveals a row's
+   actions, with a tint so the held row is unmistakable. Native long-press
+   text selection stays untouched — the JS backs off when it sees one. */
 @media (hover: none) {
+  .msg { -webkit-tap-highlight-color: transparent; }
   .msg-actions { transition: none; }
-  .msg:focus-within .msg-actions { opacity: 1; pointer-events: auto; }
-  .msg--compact:focus-within .msg-time { opacity: 1; }
+  .msg--held { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
+  .msg--held .msg-actions { opacity: 1; pointer-events: auto; }
+  .msg--compact.msg--held .msg-time { opacity: 1; }
 }
 
 /* ==========================================================================

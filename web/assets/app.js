@@ -575,6 +575,12 @@ function renderReactionsInto(msgEl, m) {
   }
 }
 
+// Let go of the long-pressed row (phones); see wireMessageList.
+function clearHeldMsg() {
+  const held = document.querySelector('#message-list .msg--held');
+  if (held) held.classList.remove('msg--held');
+}
+
 function findMsgEl(m) {
   const list = byId('message-list');
   if (!list) return null;
@@ -1502,6 +1508,9 @@ const trayItems = []; // {file, status: uploading|done|error, attachment?, xhr?,
 function renderTrayVisibility() {
   const tray = byId('attachment-tray');
   if (tray) tray.hidden = trayItems.length === 0;
+  // The tray growing or shrinking resizes the message area; a reader pinned
+  // to the bottom must not have the last messages slide out of view.
+  if (state.atBottom) scrollToBottom();
 }
 
 function setTrayProgress(item, pct, label) {
@@ -1561,8 +1570,7 @@ function uploadItem(item) {
       try {
         item.attachment = JSON.parse(xhr.responseText).attachment;
         item.status = 'done';
-        setTrayProgress(item, 100, '✓');
-        item.node.classList.add('tray-item--done');
+        item.node.classList.add('tray-item--done'); // CSS hides the spent bar
         return;
       } catch { /* fall through */ }
     }
@@ -4774,8 +4782,9 @@ function wireMessageList() {
       // stopping the scroll does not re-select whatever landed under the
       // cursor.
       sc.classList.add('is-scrolling');
-      // A tapped row keeps :focus-within (its action toolbar, on phones)
-      // until something else is tapped — scrolling away deselects it.
+      // Scrolling deselects: the long-pressed row (phones) lets go, and any
+      // focus that wandered into the list is dropped.
+      clearHeldMsg();
       const focused = document.activeElement;
       if (focused && focused.closest('#message-list')) focused.blur();
       state.atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 48;
@@ -4801,6 +4810,46 @@ function wireMessageList() {
     sc.addEventListener('touchstart', () => sc.classList.remove('is-scrolling'), { passive: true });
   }
   if (!list) return;
+
+  // Touch: a tap on a message is a non-event; only a long-press (~0.55s,
+  // still finger) reveals its actions, marked with .msg--held. Native text
+  // selection keeps priority two ways: nothing here calls preventDefault, and
+  // when the browser's own long-press has started selecting by the time the
+  // timer fires, the hold backs off. Images are skipped so their native
+  // long-press (save / share sheet) stays clean.
+  let holdTimer = 0;
+  let holdX = 0, holdY = 0;
+  list.addEventListener('touchstart', (e) => {
+    clearTimeout(holdTimer);
+    holdTimer = 0;
+    if (e.touches.length !== 1) return;
+    const row = e.target.closest('.msg');
+    const held = list.querySelector('.msg--held');
+    if (held && held !== row) clearHeldMsg(); // tapping elsewhere lets go
+    if (!row || e.target.closest('.att-img') || e.target.closest('.msg-actions')) return;
+    const t = e.touches[0];
+    holdX = t.clientX;
+    holdY = t.clientY;
+    holdTimer = setTimeout(() => {
+      holdTimer = 0;
+      const sel = getSelection();
+      if (sel && !sel.isCollapsed) return; // the browser is selecting text
+      clearHeldMsg();
+      row.classList.add('msg--held');
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 550);
+  }, { passive: true });
+  list.addEventListener('touchmove', (e) => {
+    if (!holdTimer) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - holdX) > 10 || Math.abs(t.clientY - holdY) > 10) {
+      clearTimeout(holdTimer);
+      holdTimer = 0;
+    }
+  }, { passive: true });
+  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = 0; };
+  list.addEventListener('touchend', cancelHold, { passive: true });
+  list.addEventListener('touchcancel', cancelHold, { passive: true });
 
   list.addEventListener('click', (e) => {
     const msgEl = e.target.closest('.msg');
