@@ -1400,7 +1400,7 @@ body.density-compact .msg--compact .msg-head { display: none; }
 }
 
 .pal-panel {
-  width: min(780px, 100%);
+  width: min(930px, 100%);
   margin-top: clamp(40px, 12vh, 140px);
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
@@ -1432,6 +1432,11 @@ body.density-compact .msg--compact .msg-head { display: none; }
   color: var(--text-1);
 }
 #palette-input::placeholder { color: var(--text-3); }
+/* type=search (used to keep mobile autofill strips away) must not bring the
+   browser's own clear button / decorations — we have our own ✕ */
+#palette-input::-webkit-search-cancel-button,
+#palette-input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+#palette-input { -webkit-appearance: none; appearance: none; }
 
 #palette-hint {
   padding: 8px var(--sp-4);

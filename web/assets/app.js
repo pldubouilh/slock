@@ -4775,6 +4775,12 @@ async function toggleNotifications() {
 function wireMessageList() {
   const list = byId('message-list');
   const sc = byId('message-scroll');
+  // Long-press state (phones), up here so the scroll handler can disarm it:
+  // any scroll deselects the held row AND cancels a pending hold.
+  let holdTimer = 0;
+  let holdX = 0, holdY = 0;
+  let lastScrollAt = 0;
+  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = 0; };
   if (sc) {
     sc.addEventListener('scroll', () => {
       // Scrolling slides rows under a stationary pointer (or a dragging
@@ -4783,8 +4789,12 @@ function wireMessageList() {
       // stopping the scroll does not re-select whatever landed under the
       // cursor.
       sc.classList.add('is-scrolling');
-      // Scrolling deselects: the long-pressed row (phones) lets go, and any
-      // focus that wandered into the list is dropped.
+      // Scrolling deselects: the long-pressed row (phones) lets go, a hold
+      // counting down is disarmed, and any focus that wandered into the list
+      // is dropped. The timestamp lets touchstart tell "finger stopping a
+      // coasting scroll" (must not arm a hold) from a deliberate press.
+      lastScrollAt = performance.now();
+      cancelHold();
       clearHeldMsg();
       const focused = document.activeElement;
       if (focused && focused.closest('#message-list')) focused.blur();
@@ -4818,16 +4828,16 @@ function wireMessageList() {
   // when the browser's own long-press has started selecting by the time the
   // timer fires, the hold backs off. Images are skipped so their native
   // long-press (save / share sheet) stays clean.
-  let holdTimer = 0;
-  let holdX = 0, holdY = 0;
   list.addEventListener('touchstart', (e) => {
-    clearTimeout(holdTimer);
-    holdTimer = 0;
+    cancelHold();
     if (e.touches.length !== 1) return;
     const row = e.target.closest('.msg');
     const held = list.querySelector('.msg--held');
     if (held && held !== row) clearHeldMsg(); // tapping elsewhere lets go
     if (!row || e.target.closest('.att-img') || e.target.closest('.msg-actions')) return;
+    // A finger landing on a coasting list is there to stop the scroll, not to
+    // hold a message — scroll events were firing milliseconds ago.
+    if (performance.now() - lastScrollAt < 120) return;
     const t = e.touches[0];
     holdX = t.clientX;
     holdY = t.clientY;
@@ -4843,12 +4853,8 @@ function wireMessageList() {
   list.addEventListener('touchmove', (e) => {
     if (!holdTimer) return;
     const t = e.touches[0];
-    if (Math.abs(t.clientX - holdX) > 10 || Math.abs(t.clientY - holdY) > 10) {
-      clearTimeout(holdTimer);
-      holdTimer = 0;
-    }
+    if (Math.abs(t.clientX - holdX) > 10 || Math.abs(t.clientY - holdY) > 10) cancelHold();
   }, { passive: true });
-  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = 0; };
   list.addEventListener('touchend', cancelHold, { passive: true });
   list.addEventListener('touchcancel', cancelHold, { passive: true });
 

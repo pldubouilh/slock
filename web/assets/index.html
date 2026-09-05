@@ -184,7 +184,10 @@
   <div class="pal-panel">
     <div class="pal-input-row">
       <svg class="ic" viewBox="0 0 20 20" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 4.3 4.3"/></svg>
-      <input id="palette-input" type="text" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" placeholder="Jump to a channel or person, or search…" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <!-- type=search + enterkeyhint: keeps Android's autofill strip (address/
+           card chips above the keyboard) away — text inputs invite it, search
+           fields are excluded — and labels the keyboard's enter key. -->
+      <input id="palette-input" type="search" enterkeyhint="search" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" placeholder="Jump to a channel or person, or search…" autocomplete="off" autocapitalize="off" spellcheck="false">
       <kbd class="kbd">esc</kbd>
       <button id="palette-close" class="iconbtn" type="button" aria-label="Close search" title="Close">
         <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
