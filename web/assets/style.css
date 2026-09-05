@@ -1400,7 +1400,7 @@ body.density-compact .msg--compact .msg-head { display: none; }
 }
 
 .pal-panel {
-  width: min(640px, 100%);
+  width: min(780px, 100%);
   margin-top: clamp(40px, 12vh, 140px);
   background: var(--bg-3);
   border: 1px solid var(--border-strong);
@@ -1449,7 +1449,7 @@ body.density-compact .msg--compact .msg-head { display: none; }
 }
 
 #palette-results {
-  max-height: min(430px, 52vh);
+  max-height: min(560px, 60vh);
   overflow-y: auto;
   padding: 6px;
 }
@@ -2521,9 +2521,23 @@ body.auth-page {
 
   .att-img-el { max-height: 260px; max-width: 100%; }
 
-  #palette { padding: 0 var(--sp-2) 6vh; }
-  .pal-panel { margin-top: max(12px, env(safe-area-inset-top, 0px)); }
-  #palette-results { max-height: 56vh; }
+  /* Full-height sheet: the floating card wasted the bottom third of the
+     screen. dvh (with a vh fallback) tracks the keyboard on Android, so the
+     results end at the keyboard's edge, not behind it. */
+  #palette { padding: 0; }
+  .pal-panel {
+    margin-top: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  #palette-results { max-height: none; flex: 1; }
+  .pal-input-row .kbd { display: none; } /* no Escape key on a phone; ✕ instead */
 
   .modal-wrap { padding: var(--sp-2); align-items: end; }
   .modal { border-radius: var(--r-l) var(--r-l) 12px 12px; }

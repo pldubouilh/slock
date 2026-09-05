@@ -2871,6 +2871,7 @@ function wirePalette() {
   const input = byId('palette-input');
   const list = byId('palette-results');
   on(byId('search-trigger'), 'click', () => openPalette());
+  on(byId('palette-close'), 'click', () => closePalette());
   on(input, 'input', onPaletteInput);
   on(input, 'keydown', (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); movePaletteActive(1); }
