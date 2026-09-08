@@ -2554,12 +2554,18 @@ body.auth-page {
 }
 
 /* Touch devices have no hover, and a tap is deliberately a non-event: taps
-   and scroll-flicks land on messages constantly and must select nothing. A
-   long-press (JS sets .msg--held) is the one gesture that reveals a row's
-   actions, with a tint so the held row is unmistakable. Native long-press
-   text selection stays untouched — the JS backs off when it sees one. */
+   and scroll-flicks land on messages constantly and must select nothing —
+   text selection included, so the browser's own long-press never fights the
+   app's. A long-press (JS sets .msg--held) is the one gesture that reveals a
+   row's actions, with a tint so the held row is unmistakable; the copy-text
+   action stands in for selecting a message by hand. */
 @media (hover: none) {
-  .msg { -webkit-tap-highlight-color: transparent; }
+  .msg {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
   .msg-actions { transition: none; }
   .msg--held { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
   .msg--held .msg-actions { opacity: 1; pointer-events: auto; }

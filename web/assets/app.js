@@ -498,7 +498,8 @@ function makeMsgEl(m, prev, st) {
     show('.msg-react', !m.deleted_at);
     show('.msg-pin', !m.deleted_at);
     show('.msg-reply', !m.deleted_at && !!(m.body && m.body.trim()));
-    show('.msg-copy', !m.deleted_at);
+    show('.msg-copy', !m.deleted_at && !!(m.body && m.body.trim()));
+    show('.msg-link', !m.deleted_at);
     // Filled star = pinned, like the mute bell's two-icon toggle.
     const pin = actions.querySelector('.msg-pin');
     if (pin) {
@@ -4775,8 +4776,11 @@ async function toggleNotifications() {
 function wireMessageList() {
   const list = byId('message-list');
   const sc = byId('message-scroll');
-  // Long-press state (phones), up here so the scroll handler can disarm it:
-  // any scroll deselects the held row AND cancels a pending hold.
+  // Long-press arming state (phones), up here because the scroll handler
+  // guards it: scrolling never SELECTS — a pending hold is disarmed by any
+  // scroll, and a finger landing on a coasting list (to stop it) must not
+  // arm one. A row already held before the scroll stays held; that is
+  // deliberate.
   let holdTimer = 0;
   let holdX = 0, holdY = 0;
   let lastScrollAt = 0;
@@ -4789,15 +4793,8 @@ function wireMessageList() {
       // stopping the scroll does not re-select whatever landed under the
       // cursor.
       sc.classList.add('is-scrolling');
-      // Scrolling deselects: the long-pressed row (phones) lets go, a hold
-      // counting down is disarmed, and any focus that wandered into the list
-      // is dropped. The timestamp lets touchstart tell "finger stopping a
-      // coasting scroll" (must not arm a hold) from a deliberate press.
       lastScrollAt = performance.now();
       cancelHold();
-      clearHeldMsg();
-      const focused = document.activeElement;
-      if (focused && focused.closest('#message-list')) focused.blur();
       state.atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 48;
       if (state.atBottom && state.currentId) {
         chanState(state.currentId).jumpCount = 0;
@@ -4823,11 +4820,11 @@ function wireMessageList() {
   if (!list) return;
 
   // Touch: a tap on a message is a non-event; only a long-press (~0.55s,
-  // still finger) reveals its actions, marked with .msg--held. Native text
-  // selection keeps priority two ways: nothing here calls preventDefault, and
-  // when the browser's own long-press has started selecting by the time the
-  // timer fires, the hold backs off. Images are skipped so their native
-  // long-press (save / share sheet) stays clean.
+  // still finger — moving cancels, so scroll drags never trigger it) reveals
+  // its actions, marked with .msg--held. The held row stays held until
+  // another spot is tapped. CSS turns text selection off on rows (hover:none
+  // media), so the browser's own long-press has nothing to fight over.
+  // Images are skipped so their native long-press (save / share) stays clean.
   list.addEventListener('touchstart', (e) => {
     cancelHold();
     if (e.touches.length !== 1) return;
@@ -4835,16 +4832,14 @@ function wireMessageList() {
     const held = list.querySelector('.msg--held');
     if (held && held !== row) clearHeldMsg(); // tapping elsewhere lets go
     if (!row || e.target.closest('.att-img') || e.target.closest('.msg-actions')) return;
-    // A finger landing on a coasting list is there to stop the scroll, not to
-    // hold a message — scroll events were firing milliseconds ago.
-    if (performance.now() - lastScrollAt < 120) return;
+    // A finger landing on a coasting list is there to stop the scroll — it
+    // must never read as the start of a long-press.
+    if (performance.now() - lastScrollAt < 150) return;
     const t = e.touches[0];
     holdX = t.clientX;
     holdY = t.clientY;
     holdTimer = setTimeout(() => {
       holdTimer = 0;
-      const sel = getSelection();
-      if (sel && !sel.isCollapsed) return; // the browser is selecting text
       clearHeldMsg();
       row.classList.add('msg--held');
       if (navigator.vibrate) navigator.vibrate(15);
@@ -4906,11 +4901,11 @@ function wireMessageList() {
     if (e.target.closest('.msg-copy') && msgId) {
       const st = chanState(state.currentId);
       const msg = st.byId.get(msgId);
-      if (e.altKey && msg && msg.body) {
-        copyText(msg.body, 'Text copied');   // Alt+click: copy the raw text
-      } else {
-        copyText(`${location.origin}/?c=${state.currentId}&m=${msgId}`, 'Link copied');
-      }
+      if (msg && msg.body) copyText(msg.body, 'Text copied'); // raw markdown
+      return;
+    }
+    if (e.target.closest('.msg-link') && msgId) {
+      copyText(`${location.origin}/?c=${state.currentId}&m=${msgId}`, 'Link copied');
       return;
     }
     const img = e.target.closest('.att-img-el') || (e.target.closest('.att-img') && e.target.closest('.att-img').querySelector('img'));
