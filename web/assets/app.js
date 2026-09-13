@@ -4819,7 +4819,7 @@ function wireMessageList() {
   }
   if (!list) return;
 
-  // Touch: a tap on a message is a non-event; only a long-press (~0.55s,
+  // Touch: a tap on a message is a non-event; only a long-press (1s,
   // still finger — moving cancels, so scroll drags never trigger it) reveals
   // its actions, marked with .msg--held. The held row stays held until
   // another spot is tapped. CSS turns text selection off on rows (hover:none
@@ -4843,7 +4843,7 @@ function wireMessageList() {
       clearHeldMsg();
       row.classList.add('msg--held');
       if (navigator.vibrate) navigator.vibrate(15);
-    }, 550);
+    }, 1000);
   }, { passive: true });
   list.addEventListener('touchmove', (e) => {
     if (!holdTimer) return;
@@ -4858,6 +4858,10 @@ function wireMessageList() {
     if (!msgEl) return;
     const msgId = Number(msgEl.dataset.id) || 0;
     const clientId = msgEl.dataset.clientId || '';
+
+    // Picking any toolbar action dismisses the long-press menu (phones); the
+    // emoji picker survives via .msg-actions:has(.emoji-picker) until closed.
+    if (e.target.closest('.msg-actions')) clearHeldMsg();
 
     if (e.target.closest('.msg-retry')) {
       if (clientId) retrySend(state.currentId, clientId);
@@ -5070,6 +5074,19 @@ function wireKeyboard() {
         lightboxStep(e.key === 'ArrowRight' ? 1 : -1);
         return;
       }
+    }
+    // PageUp/PageDown page through the chat (IRC-style, like the CLI) — also
+    // from the composer, where a caret jump in a few-line box is useless.
+    // Modals, the palette and the lightbox keep their own scrolling.
+    if (e.key === 'PageUp' || e.key === 'PageDown') {
+      const lightbox = byId('lightbox');
+      if (topModal() || pal.open || (lightbox && !lightbox.hidden)) return;
+      const sc = byId('message-scroll');
+      if (!sc) return;
+      e.preventDefault();
+      const dir = e.key === 'PageUp' ? -1 : 1;
+      sc.scrollBy({ top: dir * sc.clientHeight * 0.85, behavior: 'smooth' });
+      return;
     }
     // Tab on an idle screen jumps to the composer — a quick "start typing"
     // shortcut. Bail when anything is open (modal/palette/lightbox/menu/emoji

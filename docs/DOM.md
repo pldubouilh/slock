@@ -139,7 +139,7 @@ write `textContent` on the avatar element itself — that would delete the image
     body-less messages), `.msg-edit`, `.msg-delete`, `.msg-copy` (copies the
     raw message text; hidden for body-less messages), `.msg-link` (copies a
     deep link to the message). On touch devices the toolbar shows only on a
-    long-press (~0.55s, JS sets `.msg--held` on the row); taps are non-events
+    long-press (~1s, JS sets `.msg--held` on the row); taps are non-events
     and text selection is disabled on rows there — `.msg-copy` is the way to
     copy a message on a phone
   - clicking `.msg-author` or `.msg-avatar` opens the author's DM (pointer
