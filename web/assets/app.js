@@ -4777,14 +4777,19 @@ function wireMessageList() {
   const list = byId('message-list');
   const sc = byId('message-scroll');
   // Long-press arming state (phones), up here because the scroll handler
-  // guards it: scrolling never SELECTS — a pending hold is disarmed by any
-  // scroll, and a finger landing on a coasting list (to stop it) must not
-  // arm one. A row already held before the scroll stays held; that is
+  // guards it: scrolling never SELECTS — a pending or armed hold is wiped by
+  // any scroll, and a finger landing on a coasting list (to stop it) must
+  // not start one. A row already held before the scroll stays held; that is
   // deliberate.
   let holdTimer = 0;
+  let holdArmed = null; // row whose press has matured; revealed on release
   let holdX = 0, holdY = 0;
   let lastScrollAt = 0;
-  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = 0; };
+  const cancelHold = () => {
+    clearTimeout(holdTimer);
+    holdTimer = 0;
+    holdArmed = null;
+  };
   if (sc) {
     sc.addEventListener('scroll', () => {
       // Scrolling slides rows under a stationary pointer (or a dragging
@@ -4819,12 +4824,16 @@ function wireMessageList() {
   }
   if (!list) return;
 
-  // Touch: a tap on a message is a non-event; only a long-press (1s,
-  // still finger — moving cancels, so scroll drags never trigger it) reveals
-  // its actions, marked with .msg--held. The held row stays held until
-  // another spot is tapped. CSS turns text selection off on rows (hover:none
-  // media), so the browser's own long-press has nothing to fight over.
-  // Images are skipped so their native long-press (save / share) stays clean.
+  // Touch: a tap on a message is a non-event; the one gesture that reveals a
+  // row's actions is a true long CLICK — press a full second without moving,
+  // then LIFT without having moved. The menu appears on the release, never
+  // at the timer: a thumb that rests on the list and then starts scrolling
+  // fails the "lift in place" test, so it can never select anything. A
+  // vibration at the one-second mark says the press has matured. Any
+  // movement (finger or list) before the lift wipes it. CSS turns text
+  // selection off on rows (hover:none media), so the browser's own
+  // long-press has nothing to fight over; images are skipped so their native
+  // long-press (save / share) stays clean.
   list.addEventListener('touchstart', (e) => {
     cancelHold();
     if (e.touches.length !== 1) return;
@@ -4840,17 +4849,22 @@ function wireMessageList() {
     holdY = t.clientY;
     holdTimer = setTimeout(() => {
       holdTimer = 0;
-      clearHeldMsg();
-      row.classList.add('msg--held');
-      if (navigator.vibrate) navigator.vibrate(15);
+      holdArmed = row;
+      if (navigator.vibrate) navigator.vibrate(15); // matured — lift to open
     }, 1000);
   }, { passive: true });
   list.addEventListener('touchmove', (e) => {
-    if (!holdTimer) return;
+    if (!holdTimer && !holdArmed) return;
     const t = e.touches[0];
     if (Math.abs(t.clientX - holdX) > 10 || Math.abs(t.clientY - holdY) > 10) cancelHold();
   }, { passive: true });
-  list.addEventListener('touchend', cancelHold, { passive: true });
+  list.addEventListener('touchend', () => {
+    if (holdArmed) {
+      clearHeldMsg();
+      holdArmed.classList.add('msg--held');
+    }
+    cancelHold();
+  }, { passive: true });
   list.addEventListener('touchcancel', cancelHold, { passive: true });
 
   list.addEventListener('click', (e) => {
