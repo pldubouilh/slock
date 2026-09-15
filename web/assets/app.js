@@ -5002,6 +5002,14 @@ function wireHeader() {
       renderSidebar();
       renderChannelHeader();
       toast(`Joined #${ch.name}`);
+      // A non-member gets no realtime, so anything said between opening this
+      // channel and joining it is missing — and the join hands back an unread
+      // count for exactly those. Catch up, then the visible newest can be
+      // marked read; otherwise the dot sticks with no message behind it.
+      const st = chanState(ch.id);
+      if (st.loaded && newestRealId(st)) await gapFill(ch.id);
+      else { st.loaded = false; await openChannel(ch.id); }
+      maybeMarkRead();
     } catch { /* toasted */ }
   });
   on(byId('members-btn'), 'click', openMembersModal);
