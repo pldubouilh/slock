@@ -94,6 +94,8 @@ SELECT `+channelCols+`,
                     SELECT 1 FROM messages m
                      WHERE m.channel_id = c.id AND m.deleted_at IS NULL
                        AND m.user_id <> $2 AND m.id > cm.last_read_message_id
+                       -- limited-history users: pre-account messages are not unread
+                       AND m.created_at >= COALESCE((SELECT history_cutoff FROM users WHERE id = $2), '-infinity'::timestamptz)
                      ORDER BY m.id DESC
                      LIMIT %d
                  ) capped), 0) AS unread_count,
@@ -200,6 +202,8 @@ WITH my AS (
                    AND m.id > my.last_read_message_id
                    AND m.user_id <> $1
                    AND m.deleted_at IS NULL
+                   -- limited-history users: pre-account messages are not unread
+                   AND m.created_at >= COALESCE((SELECT history_cutoff FROM users WHERE id = $1), '-infinity'::timestamptz)
                  -- ORDER BY is what makes the planner reach for
                  -- messages_unread_idx instead of walking the primary key.
                  ORDER BY m.id DESC

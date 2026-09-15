@@ -4109,6 +4109,7 @@ async function openAdminModal() {
           email: String(fd.get('email') || '').trim(),
           display_name: String(fd.get('display_name') || '').trim(),
           is_admin: !!fd.get('is_admin'),
+          limit_history: !!fd.get('limit_history'),
         },
       });
       users.unshift(data.user);

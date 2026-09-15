@@ -24,6 +24,12 @@ type User struct {
 	// buster so a new upload is picked up immediately.
 	AvatarSHA string `json:"-"`
 	AvatarURL string `json:"avatar_url"`
+
+	// HistoryCutoff, when set, hides every message created before it from
+	// this user: history, search, pins, attachments, unread counts. Set at
+	// account creation ("only see messages from now on"), never exposed on
+	// the wire.
+	HistoryCutoff *time.Time `json:"-"`
 }
 
 // SetAvatarURL derives the client-facing avatar URL from AvatarSHA. Every scan

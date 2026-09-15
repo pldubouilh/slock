@@ -51,6 +51,9 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) e
 		Email       string `json:"email"`
 		DisplayName string `json:"display_name"`
 		IsAdmin     bool   `json:"is_admin"`
+		// LimitHistory hides everything said before this account existed:
+		// history pages, search, pins, attachment lists, unread counts.
+		LimitHistory bool `json:"limit_history"`
 	}
 	if err := httpx.DecodeJSON(w, r, &in); err != nil {
 		return err
@@ -75,10 +78,10 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) e
 
 	var u db.User
 	row := s.DB.Pool.QueryRow(r.Context(),
-		`INSERT INTO users (email, display_name, password_hash, avatar_color, is_admin, must_change_pw)
-		 VALUES ($1, $2, $3, $4, $5, TRUE)
+		`INSERT INTO users (email, display_name, password_hash, avatar_color, is_admin, must_change_pw, history_cutoff)
+		 VALUES ($1, $2, $3, $4, $5, TRUE, CASE WHEN $6 THEN now() END)
 		 RETURNING `+userColumnsBare,
-		email, name, hash, avatarColorFor(email), in.IsAdmin)
+		email, name, hash, avatarColorFor(email), in.IsAdmin, in.LimitHistory)
 	if err := scanUserRow(row, &u); err != nil {
 		if isUniqueViolation(err) {
 			return httpx.Conflict("That email address is already registered.")

@@ -171,7 +171,10 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) erro
 	before := int64(httpx.QueryInt(r, "before", 0))
 	after := int64(httpx.QueryInt(r, "after", 0))
 
-	// Fetch one extra row to know whether another page exists.
+	// Fetch one extra row to know whether another page exists. The cutoff
+	// clause enforces per-user limited history (users.history_cutoff): NULL —
+	// everyone by default — disables it.
+	const cutoff = ` AND ($4::timestamptz IS NULL OR m.created_at >= $4)`
 	var (
 		sql      string
 		args     []any
@@ -180,17 +183,18 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) erro
 	switch {
 	case after > 0:
 		sql = `SELECT ` + messageCols + ` FROM messages m
-		        WHERE m.channel_id = $1 AND m.id > $2 ORDER BY m.id ASC LIMIT $3`
-		args = []any{id, after, limit + 1}
+		        WHERE m.channel_id = $1 AND m.id > $2` + cutoff + ` ORDER BY m.id ASC LIMIT $3`
+		args = []any{id, after, limit + 1, me.HistoryCutoff}
 		ascOrder = true
 	case before > 0:
 		sql = `SELECT ` + messageCols + ` FROM messages m
-		        WHERE m.channel_id = $1 AND m.id < $2 ORDER BY m.id DESC LIMIT $3`
-		args = []any{id, before, limit + 1}
+		        WHERE m.channel_id = $1 AND m.id < $2` + cutoff + ` ORDER BY m.id DESC LIMIT $3`
+		args = []any{id, before, limit + 1, me.HistoryCutoff}
 	default:
 		sql = `SELECT ` + messageCols + ` FROM messages m
-		        WHERE m.channel_id = $1 ORDER BY m.id DESC LIMIT $2`
-		args = []any{id, limit + 1}
+		        WHERE m.channel_id = $1 AND ($3::timestamptz IS NULL OR m.created_at >= $3)
+		        ORDER BY m.id DESC LIMIT $2`
+		args = []any{id, limit + 1, me.HistoryCutoff}
 	}
 
 	rows, err := s.DB.Pool.Query(ctx, sql, args...)

@@ -339,7 +339,7 @@ leaves the bot and its messages: removing the user would erase history.
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/api/admin/users` | – | `200 {users: [User]}` — includes inactive, with emails |
-| POST | `/api/admin/users` | `{email, display_name, is_admin?}` | `201 {user, temp_password}` |
+| POST | `/api/admin/users` | `{email, display_name, is_admin?, limit_history?}` | `201 {user, temp_password}` |
 | PATCH | `/api/admin/users/{id}` | `{display_name?, is_admin?, is_active?}` | `200 {user}` |
 | POST | `/api/admin/users/{id}/reset-password` | – | `200 {temp_password}` |
 
@@ -347,3 +347,9 @@ New users get a random temporary password returned **once** to the admin (the
 plan is that the admin passes it on by hand) and `must_change_pw = true`. If
 SendGrid is configured a welcome mail is also attempted, best-effort. New users
 are auto-joined to `#general`. Admins cannot deactivate or demote themselves.
+
+`limit_history: true` stamps `users.history_cutoff` with the account's
+creation time: that user never sees messages created before it — history
+pages, search, pins, attachment lists and unread counts all exclude them,
+server-side. The flag is set at creation only and never exposed on the wire;
+clearing it later is a manual `UPDATE users SET history_cutoff = NULL`.

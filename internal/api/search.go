@@ -151,6 +151,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 	where = append(where, `(c.kind = 'channel' AND NOT c.is_private
 	                        OR EXISTS (SELECT 1 FROM channel_members cm
 	                                    WHERE cm.channel_id = m.channel_id AND cm.user_id = $1))`)
+	// Per-user limited history: a viewer with users.history_cutoff set never
+	// sees messages older than their account, search included.
+	where = append(where,
+		`m.created_at >= COALESCE((SELECT history_cutoff FROM users WHERE id = $1), '-infinity'::timestamptz)`)
 
 	snippet := "left(m.body, 400)"
 	if q.Text != "" {

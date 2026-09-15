@@ -89,10 +89,11 @@ func (s *Server) handleListChannelAttachments(w http.ResponseWriter, r *http.Req
 	               m.user_id, m.created_at
 	          FROM attachments a
 	          JOIN messages m ON m.id = a.message_id
-	         WHERE m.channel_id = $1 AND m.deleted_at IS NULL`
-	args := []any{id, limit + 1}
+	         WHERE m.channel_id = $1 AND m.deleted_at IS NULL
+	           AND ($3::timestamptz IS NULL OR m.created_at >= $3)`
+	args := []any{id, limit + 1, me.HistoryCutoff}
 	if before > 0 {
-		sql += ` AND a.id < $3`
+		sql += ` AND a.id < $4`
 		args = append(args, before)
 	}
 	sql += ` ORDER BY a.id DESC LIMIT $2`

@@ -112,8 +112,9 @@ func (s *Server) handleListPins(w http.ResponseWriter, r *http.Request) error {
 		   FROM pins p
 		   JOIN messages m ON m.id = p.message_id
 		  WHERE p.channel_id = $1 AND m.deleted_at IS NULL
+		    AND ($3::timestamptz IS NULL OR m.created_at >= $3)
 		  ORDER BY p.created_at DESC
-		  LIMIT $2`, id, limit)
+		  LIMIT $2`, id, limit, me.HistoryCutoff)
 	if err != nil {
 		return err
 	}
