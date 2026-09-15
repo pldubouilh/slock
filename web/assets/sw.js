@@ -145,11 +145,29 @@ self.addEventListener('fetch', (event) => {
 
   // API: network-first for the handful of reads a channel needs, so being
   // online behaves exactly as it did before — the cache is consulted only
-  // when the fetch itself fails. /api/events (an endless stream), /api/files
-  // and every write fall through to the browser untouched.
+  // when the fetch itself fails. Exception: a request marked
+  // X-Slock-Prefer-Cache (the page sends it while it has no live SSE stream
+  // — boot, reconnect, bad connection) is answered from the saved copy
+  // immediately, with a background fetch refreshing the store; the page
+  // reconciles once its stream connects. /api/events (an endless stream),
+  // /api/files and every write fall through to the browser untouched.
   if (url.pathname.startsWith('/api/')) {
     if (!offlineReadable(url)) return;
     event.respondWith((async () => {
+      if (req.headers.get('X-Slock-Prefer-Cache') === '1') {
+        const cache = await caches.open(API_CACHE);
+        const cached = await cache.match(req, { ignoreSearch: true });
+        if (cached) {
+          event.waitUntil((async () => {
+            try {
+              const res = await fetch(req);
+              if (res.ok) await putApi(req, url, res);
+            } catch { /* offline: the copy we just served stands */ }
+          })());
+          return fromCache(cached);
+        }
+        // Nothing saved: fall through to the normal network-first path.
+      }
       try {
         const res = await fetch(req);
         // Hand the page its response immediately and store a clone in the
@@ -169,9 +187,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Navigations: network-first, cached shell as offline fallback.
+  // Navigations to the app itself: cached shell first — on a slow connection
+  // the logo used to stand in for seconds while the network dawdled. Safe
+  // because the shell cache is keyed by build: a deploy installs a new
+  // worker+cache and the version check reloads the page. A background fetch
+  // keeps the copy fresh within a build. Other pages (login.html) stay
+  // network-first with no shell fallback.
   if (req.mode === 'navigate') {
     event.respondWith((async () => {
+      if (url.pathname === '/') {
+        const cached = await caches.match('/');
+        if (cached) {
+          event.waitUntil((async () => {
+            try {
+              const res = await fetch(req);
+              if (res.ok) await (await caches.open(CACHE)).put('/', res);
+            } catch { /* offline */ }
+          })());
+          return cached;
+        }
+      }
       try {
         return await fetch(req);
       } catch {
@@ -197,8 +232,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Other shell assets: network-first with cache fallback, refreshing the copy.
+  // Other shell assets (style.css, app.js, manifest): cache-first, same
+  // build-keyed safety as navigations, refreshed in the background.
   event.respondWith((async () => {
+    const cached = await caches.match(req);
+    if (cached) {
+      event.waitUntil((async () => {
+        try {
+          const res = await fetch(req);
+          if (res.ok) await (await caches.open(CACHE)).put(req, res);
+        } catch { /* offline */ }
+      })());
+      return cached;
+    }
     try {
       const res = await fetch(req);
       if (res.ok) {
@@ -207,8 +253,7 @@ self.addEventListener('fetch', (event) => {
       }
       return res;
     } catch {
-      const cached = await caches.match(req);
-      return cached || Response.error();
+      return Response.error();
     }
   })());
 });

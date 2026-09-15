@@ -129,6 +129,12 @@ function copyText(text, label) {
 async function api(path, opts = {}) {
   const { method = 'GET', body, signal, toast: doToast = true } = opts;
   const init = { method, signal, headers: {} };
+  // No live stream yet — booting, reconnecting, or a bad connection: ask the
+  // service worker for its saved copy served instantly (refreshed in the
+  // background). Cached messages in a beat beat a logo for ten seconds; the
+  // SSE hello that follows gap-fills and refetches, so nothing stays stale.
+  // With the stream up, reads are network-first exactly as before.
+  if (method === 'GET' && !state.connected) init.headers['X-Slock-Prefer-Cache'] = '1';
   if (body instanceof FormData) {
     init.body = body;
   } else if (body !== undefined) {
