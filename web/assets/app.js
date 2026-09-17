@@ -664,8 +664,8 @@ function updateJumpLatest() {
 /* ============================================================ body tokeniser */
 
 // Compact message formatting: escape-by-construction (DOM nodes, never HTML
-// strings), links, **bold**, *italic* / _italic_, `code`, ```fences```,
-// > quotes, @mentions. Newlines preserved.
+// strings), links, **bold**, *italic* / _italic_, ~strike~, `code`,
+// ```fences```, > quotes, @mentions. Newlines preserved.
 
 const URL_RE = /^https?:\/\/[^\s<>"']+/;
 const TRAIL_PUNCT = /[.,;:!?)\]}'"]+$/;
@@ -716,6 +716,18 @@ function renderInline(text, out) {
         renderInline(text.slice(i + 2, end), strong);
         out.append(strong);
         i = end + 2;
+        continue;
+      }
+    }
+
+    if (ch === '~') {
+      const end = text.indexOf('~', i + 1);
+      if (end > i + 1 && !text.slice(i + 1, end).includes('\n')) {
+        flush();
+        const del = document.createElement('del');
+        renderInline(text.slice(i + 1, end), del);
+        out.append(del);
+        i = end + 1;
         continue;
       }
     }
@@ -785,52 +797,59 @@ function renderInline(text, out) {
   flush();
 }
 
+// ```fences``` are matched anywhere in the body, not just at the start of a
+// line — "text ```code``` more" is a code block mid-message, the way Slack and
+// Discord treat it. A newline that only exists to separate a fence sitting on
+// its own line from its neighbours is absorbed so the block does not gain a
+// blank line; a fence glued to text ("teset ```…") keeps that text inline
+// before it. An unclosed fence has no match and stays literal.
 function renderBody(el, body) {
   el.textContent = '';
-  const lines = String(body).split('\n');
+  const src = String(body);
+  const fence = /```([\s\S]*?)```/g;
+  let last = 0;
+  let afterFence = false;
+  let m;
+  while ((m = fence.exec(src)) !== null) {
+    let text = src.slice(last, m.index);
+    if (afterFence) text = text.replace(/^\n/, '');
+    text = text.replace(/\n$/, ''); // the newline that led into this fence
+    if (text) renderTextBlock(el, text);
+    appendCodeBlock(el, m[1]);
+    last = fence.lastIndex;
+    afterFence = true;
+  }
+  let tail = src.slice(last);
+  if (afterFence) tail = tail.replace(/^\n/, '');
+  if (tail || !afterFence) renderTextBlock(el, tail);
+}
+
+function appendCodeBlock(el, raw) {
+  let text = raw;
+  if (text.startsWith('\n')) {
+    text = text.slice(1); // opening fence ended its line; content starts next
+  } else {
+    // A bare token glued to the fence then a newline is a language hint (```go)
+    // and dropped; content glued on the same line (```1. do this) is kept.
+    const info = text.match(/^([A-Za-z0-9+.#_-]+)\n/);
+    if (info) text = text.slice(info[0].length);
+  }
+  text = text.replace(/\n$/, ''); // closing fence sat on its own line
+  const pre = document.createElement('pre');
+  const code = document.createElement('code');
+  code.textContent = text;
+  pre.append(code);
+  el.append(pre);
+}
+
+// One run of non-fenced text: `> ` quote groups and inline formatting, with
+// newlines preserved as <br>.
+function renderTextBlock(el, text) {
+  const lines = text.split('\n');
   let i = 0;
   let lastWasText = false;
   while (i < lines.length) {
-    const line = lines[i];
-
-    if (/^```/.test(line)) {
-      // Fence opened and closed on one line (``` asd ```): a one-line block.
-      // Otherwise the remainder of the opening line is an info string (```js)
-      // and the block runs to the closing fence.
-      const single = line.match(/^```(.*[^`].*?)```\s*$/);
-      let text;
-      let j = i;
-      if (single) {
-        text = single[1].trim();
-      } else {
-        const buf = [];
-        // Text glued to the opening fence: a bare word is a language/info
-        // string (```go) and dropped, but anything else (```1. Open…) is real
-        // content — the first line of the block — so keep it rather than eat it.
-        const rest = line.slice(3);
-        if (rest.trim() && !/^[\w+.#-]+$/.test(rest.trim())) buf.push(rest);
-        // Collect until the closing fence, which may sit on its own line or be
-        // glued to the end of the last content line (…done.```).
-        for (j = i + 1; j < lines.length; j++) {
-          const l = lines[j];
-          if (/^```\s*$/.test(l)) break;             // fence on its own line
-          const closed = l.match(/^(.*[^`])```\s*$/); // fence glued to content
-          if (closed) { buf.push(closed[1]); break; }
-          buf.push(l);
-        }
-        text = buf.join('\n');
-      }
-      const pre = document.createElement('pre');
-      const code = document.createElement('code');
-      code.textContent = text;
-      pre.append(code);
-      el.append(pre);
-      i = j < lines.length ? j + 1 : j;
-      lastWasText = false;
-      continue;
-    }
-
-    if (/^>\s?/.test(line)) {
+    if (/^>\s?/.test(lines[i])) {
       const bq = document.createElement('blockquote');
       let first = true;
       while (i < lines.length && /^>\s?/.test(lines[i])) {
@@ -843,9 +862,8 @@ function renderBody(el, body) {
       lastWasText = false;
       continue;
     }
-
     if (lastWasText) el.append(document.createElement('br'));
-    renderInline(line, el);
+    renderInline(lines[i], el);
     lastWasText = true;
     i++;
   }
@@ -4789,14 +4807,9 @@ function wireMessageList() {
   // not start one. A row already held before the scroll stays held; that is
   // deliberate.
   let holdTimer = 0;
-  let holdArmed = null; // row whose press has matured; revealed on release
   let holdX = 0, holdY = 0;
   let lastScrollAt = 0;
-  const cancelHold = () => {
-    clearTimeout(holdTimer);
-    holdTimer = 0;
-    holdArmed = null;
-  };
+  const cancelHold = () => { clearTimeout(holdTimer); holdTimer = 0; };
   if (sc) {
     sc.addEventListener('scroll', () => {
       // Scrolling slides rows under a stationary pointer (or a dragging
@@ -4832,14 +4845,11 @@ function wireMessageList() {
   if (!list) return;
 
   // Touch: a tap on a message is a non-event; the one gesture that reveals a
-  // row's actions is a true long CLICK — press a full second without moving,
-  // then LIFT without having moved. The menu appears on the release, never
-  // at the timer: a thumb that rests on the list and then starts scrolling
-  // fails the "lift in place" test, so it can never select anything. A
-  // vibration at the one-second mark says the press has matured. Any
-  // movement (finger or list) before the lift wipes it. CSS turns text
-  // selection off on rows (hover:none media), so the browser's own
-  // long-press has nothing to fight over; images are skipped so their native
+  // row's actions is a long press — hold ~0.6s roughly in place and the
+  // toolbar appears there and then (finger still down), staying until another
+  // spot is tapped. Any real movement before it fires is a scroll and cancels
+  // it, so scrolling never selects. CSS turns text selection and the native
+  // callout off on rows (hover:none media); images are skipped so their own
   // long-press (save / share) stays clean.
   list.addEventListener('touchstart', (e) => {
     cancelHold();
@@ -4850,28 +4860,23 @@ function wireMessageList() {
     if (!row || e.target.closest('.att-img') || e.target.closest('.msg-actions')) return;
     // A finger landing on a coasting list is there to stop the scroll — it
     // must never read as the start of a long-press.
-    if (performance.now() - lastScrollAt < 150) return;
+    if (performance.now() - lastScrollAt < 200) return;
     const t = e.touches[0];
     holdX = t.clientX;
     holdY = t.clientY;
     holdTimer = setTimeout(() => {
       holdTimer = 0;
-      holdArmed = row;
-      if (navigator.vibrate) navigator.vibrate(15); // matured — lift to open
-    }, 1000);
+      clearHeldMsg();
+      row.classList.add('msg--held'); // reveal now, finger still down
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 600);
   }, { passive: true });
   list.addEventListener('touchmove', (e) => {
-    if (!holdTimer && !holdArmed) return;
+    if (!holdTimer) return;
     const t = e.touches[0];
-    if (Math.abs(t.clientX - holdX) > 10 || Math.abs(t.clientY - holdY) > 10) cancelHold();
+    if (Math.abs(t.clientX - holdX) > 12 || Math.abs(t.clientY - holdY) > 12) cancelHold();
   }, { passive: true });
-  list.addEventListener('touchend', () => {
-    if (holdArmed) {
-      clearHeldMsg();
-      holdArmed.classList.add('msg--held');
-    }
-    cancelHold();
-  }, { passive: true });
+  list.addEventListener('touchend', cancelHold, { passive: true });
   list.addEventListener('touchcancel', cancelHold, { passive: true });
 
   list.addEventListener('click', (e) => {
