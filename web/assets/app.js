@@ -1110,6 +1110,27 @@ async function jumpToMessage(channelId, msgId) {
   }
 }
 
+// A pasted slock link ("…/?c=5&m=42") is just an <a> in a message body. Rather
+// than open a second window, route same-origin channel links through the SPA:
+// switch channel (and jump to the message) in place. Modifier/middle clicks and
+// links to other origins fall through to the browser untouched.
+function wireInternalLinks() {
+  document.addEventListener('click', (e) => {
+    if (e.defaultPrevented || e.button !== 0) return;
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest('a[href]');
+    if (!a) return;
+    let u;
+    try { u = new URL(a.href); } catch { return; }
+    if (u.origin !== location.origin || (u.pathname !== '/' && u.pathname !== '')) return;
+    const c = Number(u.searchParams.get('c'));
+    if (!c) return; // a plain home link, not a channel deep link
+    const m = Number(u.searchParams.get('m')) || 0;
+    e.preventDefault();
+    openChannel(c, m ? { jumpTo: m } : {});
+  });
+}
+
 function renderChannelHeader() {
   const ch = state.channels.get(state.currentId);
   const title = byId('channel-title');
@@ -5462,6 +5483,7 @@ async function boot() {
   wireVisibility();
   wireSwipe();
   wireSidebarResize();
+  wireInternalLinks();
 
   // Workspace identity, in parallel and non-blocking: the built-in mark and
   // the "slock" default stand until (unless) this answers.
