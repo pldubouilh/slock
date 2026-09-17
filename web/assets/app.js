@@ -206,6 +206,9 @@ const LS = {
   sidebarW: 'slock:sidebar-width',
   zoom: 'slock:zoom',
   closedDMs: 'slock:closed-dms',
+  pinnedChans: 'slock:pinned-channels',
+  foldChans: 'slock:fold-channels',
+  foldDMs: 'slock:fold-dms',
   font: 'slock:font',
   lastChannel: 'slock:last-channel',
   drafts: 'slock:drafts',
@@ -335,7 +338,8 @@ function sortedChannels() {
     // Public channels show to everyone (join from the list); a private channel
     // is member-only, so once you leave (or are removed) it must disappear.
     .filter((c) => c.kind === 'channel' && (!c.is_private || c.is_member))
-    .sort((a, b) => (b.is_member - a.is_member) || a.name.localeCompare(b.name));
+    .sort((a, b) => (isChannelPinned(b.id) - isChannelPinned(a.id))
+      || (b.is_member - a.is_member) || a.name.localeCompare(b.name));
 }
 
 // A private channel you're no longer in is gone for good — you cannot see or
@@ -358,7 +362,8 @@ function sortedDMs() {
     // closedDMs = device-locally hidden conversations; a new message or a
     // deliberate reopen (reopenDM) puts them back.
     .filter((c) => c.kind === 'dm' && !closedDMs.has(c.id))
-    .sort((a, b) => String(b.last_message_at || '').localeCompare(String(a.last_message_at || '')));
+    .sort((a, b) => (isChannelPinned(b.id) - isChannelPinned(a.id))
+      || String(b.last_message_at || '').localeCompare(String(a.last_message_at || '')));
 }
 
 function renderSidebar() {
@@ -367,6 +372,7 @@ function renderSidebar() {
   if (chanList) {
     chanList.textContent = '';
     for (const ch of sortedChannels()) {
+      if (!visibleInSidebar(ch)) continue;
       const li = tpl('tpl-channel-item');
       if (!li) break;
       li.dataset.id = ch.id;
@@ -375,6 +381,7 @@ function renderSidebar() {
       li.classList.toggle('chan--muted', isMuted(ch));
       li.classList.toggle('chan--member', !!ch.is_member);
       li.classList.toggle('chan--private', !!ch.is_private);
+      li.classList.toggle('chan--pinned', isChannelPinned(ch.id));
       const name = li.querySelector('.chan-name');
       if (name) name.textContent = ch.name;
       const badge = li.querySelector('.chan-badge');
@@ -388,6 +395,7 @@ function renderSidebar() {
   if (dmList) {
     dmList.textContent = '';
     for (const ch of sortedDMs()) {
+      if (!visibleInSidebar(ch)) continue;
       const li = tpl('tpl-dm-item');
       if (!li) break;
       const peer = state.users.get(ch.peer_user_id);
@@ -396,6 +404,7 @@ function renderSidebar() {
       li.classList.toggle('dm--active', ch.id === state.currentId);
       li.classList.toggle('dm--unread', ch.unread_count > 0 && !isMuted(ch));
       li.classList.toggle('dm--online', state.online.has(ch.peer_user_id));
+      li.classList.toggle('dm--pinned', isChannelPinned(ch.id));
       applyAvatar(li.querySelector('.dm-avatar'), peer);
       const name = li.querySelector('.dm-name');
       if (name) name.textContent = peer ? peer.display_name : 'Unknown';
@@ -686,6 +695,20 @@ function matchMention(text, i) {
   const m = /^[A-Za-z0-9][\w.-]*/.exec(rest);
   if (m) return { text: '@' + m[0], user: null, len: m[0].length + 1 };
   return null;
+}
+
+// Whether a message body @-mentions the signed-in user. Mirrors renderInline's
+// mention rules (same boundaries, same matchMention) so it agrees with what
+// renders as .mention--me.
+function mentionsMe(text) {
+  if (!state.me || !text || !text.includes('@')) return false;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== '@') continue;
+    if (i !== 0 && !/[\s([{'">]/.test(text[i - 1])) continue;
+    const mm = matchMention(text, i);
+    if (mm && mm.user && mm.user.id === state.me.id) return true;
+  }
+  return false;
 }
 
 function renderInline(text, out) {
@@ -1163,6 +1186,16 @@ function renderChannelHeader() {
   }
   const pinsBtn = byId('pins-btn');
   if (pinsBtn) pinsBtn.hidden = !ch;
+  const pinChanBtn = byId('pin-channel-btn');
+  if (pinChanBtn) {
+    // Pin-to-sidebar works for channels and DMs alike.
+    pinChanBtn.hidden = !ch;
+    const pinned = ch && isChannelPinned(ch.id);
+    pinChanBtn.classList.toggle('is-on', !!pinned);
+    pinChanBtn.setAttribute('aria-pressed', pinned ? 'true' : 'false');
+    pinChanBtn.title = pinned ? 'Unpin from sidebar' : 'Pin to sidebar';
+    pinChanBtn.setAttribute('aria-label', pinChanBtn.title);
+  }
   const filesBtn = byId('files-btn');
   if (filesBtn) filesBtn.hidden = !ch; // any readable channel has history
   const infoBtn = byId('info-btn');
@@ -1196,6 +1229,7 @@ function sendMarkRead(channelId) {
   if (state.lastReadSent.get(channelId) === lastId && ch.unread_count === 0) return;
   state.lastReadSent.set(channelId, lastId);
   ch.unread_count = 0;
+  mentionedChans.delete(channelId); // caught up: the mention no longer surfaces it
   // Caught up: drop the "new messages" divider so it doesn't linger once read.
   // Only the open channel has one in the DOM.
   if (st.unreadStartId) {
@@ -1240,6 +1274,9 @@ function totalUnread() {
   for (const ch of state.channels.values()) {
     if (isMuted(ch)) continue;
     if (ch.kind === 'channel' && !ch.is_member) continue;
+    // Folded away and not surfaced (pinned, open, or mentioned): the user chose
+    // to hide it, so it must not light the window title / app badge either.
+    if (!visibleInSidebar(ch)) continue;
     n += ch.unread_count || 0;
   }
   return n;
@@ -2599,6 +2636,10 @@ function onMessageNew(data) {
     && !document.hidden && document.hasFocus();
   if (!isOwn && !visibleHere) {
     ch.unread_count = (ch.unread_count || 0) + 1;
+    // A DM is direct, and an @-mention is aimed at you: either must surface the
+    // channel past a fold and count toward the title. A plain message in a
+    // folded-away channel does none of that.
+    if (ch.kind === 'dm' || mentionsMe(m.body)) mentionedChans.add(channelId);
     renderSidebar();
     updateBadges();
   } else if (!isOwn) {
@@ -3426,6 +3467,72 @@ function closeDMConversation() {
     renderSidebar();
     renderChannelHeader();
   }
+}
+
+/* -------- pinned channels + folded sections (device-local) --------
+   Pinning a channel or DM keeps it visible when its section is folded to
+   "pinned only". Channels and DMs fold independently. All per-device, like
+   closedDMs, colours, density. */
+
+let pinnedChans = new Set();
+let foldChans = false;
+let foldDMs = false;
+// Channels/DMs with an unread @-mention (or, for DMs, any unread message):
+// surfaced past a fold and counted in the window title even while hidden.
+// In-memory and live-only — cleared when the channel is read.
+const mentionedChans = new Set();
+
+function loadSidebarPrefs() {
+  try {
+    pinnedChans = new Set((JSON.parse(localStorage.getItem(LS.pinnedChans) || '[]')).map(Number));
+  } catch {
+    pinnedChans = new Set();
+  }
+  foldChans = localStorage.getItem(LS.foldChans) === '1';
+  foldDMs = localStorage.getItem(LS.foldDMs) === '1';
+}
+
+function isChannelPinned(id) {
+  return pinnedChans.has(Number(id));
+}
+
+function togglePinChannel(id) {
+  id = Number(id);
+  if (!pinnedChans.delete(id)) pinnedChans.add(id);
+  if (pinnedChans.size) localStorage.setItem(LS.pinnedChans, JSON.stringify([...pinnedChans]));
+  else localStorage.removeItem(LS.pinnedChans);
+  renderSidebar();
+  renderChannelHeader();
+  const ch = state.channels.get(id);
+  const pinned = pinnedChans.has(id);
+  if (ch) toast(pinned ? `Pinned ${channelDisplayName(ch)}` : `Unpinned ${channelDisplayName(ch)}`);
+}
+
+function reflectFoldButton(kind) {
+  const btn = byId(kind === 'dm' ? 'fold-dms' : 'fold-channels');
+  if (!btn) return;
+  const folded = kind === 'dm' ? foldDMs : foldChans;
+  const noun = kind === 'dm' ? 'DMs' : 'channels';
+  btn.classList.toggle('is-on', folded);
+  btn.setAttribute('aria-pressed', folded ? 'true' : 'false');
+  btn.title = folded ? `Show all ${noun}` : `Show pinned ${noun} only`;
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function setSectionFolded(kind, on) {
+  const key = kind === 'dm' ? LS.foldDMs : LS.foldChans;
+  if (kind === 'dm') foldDMs = !!on; else foldChans = !!on;
+  if (on) localStorage.setItem(key, '1'); else localStorage.removeItem(key);
+  reflectFoldButton(kind);
+  renderSidebar();
+}
+
+// A folded section shows only pinned rows — plus the open one (never lose your
+// place) and any with an unread mention (a mention must always surface).
+function visibleInSidebar(ch) {
+  const folded = ch.kind === 'dm' ? foldDMs : foldChans;
+  return !folded || isChannelPinned(ch.id) || ch.id === state.currentId
+    || mentionedChans.has(ch.id);
 }
 
 /* -------- pinned messages (#msg-pin, #pins-btn) */
@@ -5082,6 +5189,10 @@ function wireSidebar() {
   on(byId('dm-list'), 'click', open);
   on(byId('new-channel-btn'), 'click', openNewChannelModal);
   on(byId('new-dm-btn'), 'click', openNewDMModal);
+  on(byId('fold-channels'), 'click', () => setSectionFolded('channel', !foldChans));
+  on(byId('fold-dms'), 'click', () => setSectionFolded('dm', !foldDMs));
+  reflectFoldButton('channel'); // reflect the saved state on both buttons
+  reflectFoldButton('dm');
   on(byId('nav-toggle'), 'click', () => {
     if (document.body.classList.toggle('nav-open')) dismissKeyboard();
   });
@@ -5149,6 +5260,7 @@ function wireHeader() {
   on(byId('mute-btn'), 'click', toggleMute);
   on(byId('files-btn'), 'click', openFilesModal);
   on(byId('pins-btn'), 'click', openPinsModal);
+  on(byId('pin-channel-btn'), 'click', () => { if (state.currentId) togglePinChannel(state.currentId); });
   on(byId('close-dm-btn'), 'click', closeDMConversation);
   on(byId('info-btn'), 'click', openChannelInfoModal);
   on(byId('jump-latest'), 'click', () => {
@@ -5511,6 +5623,7 @@ async function boot() {
   applySidebarWidth(parseInt(localStorage.getItem(LS.sidebarW), 10) || 0);
   applyZoom(parseFloat(localStorage.getItem(LS.zoom)) || 1);
   loadClosedDMs();
+  loadSidebarPrefs();
   applyFont(localStorage.getItem(LS.font) || '');
   restoreUploadedFont();
   // On "system", an OS theme flip swaps which custom-colour slot applies.

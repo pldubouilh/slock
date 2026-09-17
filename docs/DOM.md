@@ -29,8 +29,24 @@ strings, so the templates are where message/row structure lives.
     .workspace-logo         the built-in SVG mark, shown when there is no icon
     #search-trigger         icon button beside the workspace name — opens the
                         palette (magnifier + "⌘K" hint)
-    #channel-list           <ul>, JS fills with #tpl-channel-item clones
-    #dm-list                <ul>, JS fills with #tpl-dm-item clones
+    #fold-channels          .fold-btn in the Channels section head, beside
+                        #new-channel-btn — folds that section to "pinned only"
+                        (localStorage["slock:fold-channels"]); .is-on + chevron
+                        flips when folded
+    #fold-dms               same for the DMs section head, beside #new-dm-btn
+                        (localStorage["slock:fold-dms"]) — the two fold
+                        independently. A folded section shows only pinned rows,
+                        the open one, and any with an unread @-mention (or, for
+                        DMs, any unread) — those also count in the window title
+                        / app badge and blip; a folded-away, un-surfaced channel
+                        does none of that. The section head (with its controls)
+                        always stays so the fold can be undone.
+    #channel-list           <ul>, JS fills with #tpl-channel-item clones; a
+                        pinned row carries .chan--pinned + a .row-pin glyph
+    #dm-list                <ul>, JS fills with #tpl-dm-item clones; .dm--pinned
+                        + .row-pin when pinned. Pins live in
+                        localStorage["slock:pinned-channels"] (channel ids;
+                        DMs included) and sort to the top of their section
     #new-channel-btn        button
     #new-dm-btn             button
     #me-chip                current user button (opens #me-menu)
@@ -53,6 +69,8 @@ strings, so the templates are where message/row structure lives.
       #channel-actions      holds #members-btn, #join-btn, #mute-btn (bell icon,
                       `.bell-plain`/`.bell-slash` toggled by mute state),
                       #pins-btn (pinned-messages modal),
+                      #pin-channel-btn (pins this channel/DM to the sidebar so
+                      it survives collapse — .is-on when pinned; works for DMs),
                       #files-btn (channel attachments modal), #info-btn,
                       #close-dm-btn (DMs only: hides the conversation from
                       the rail on this device — localStorage

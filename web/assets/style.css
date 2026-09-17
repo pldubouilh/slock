@@ -515,7 +515,13 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   text-transform: uppercase;
   color: var(--text-3);
 }
+.side-sec-actions { display: flex; align-items: center; gap: 2px; }
 .side-sec-head .iconbtn { width: 26px; height: 26px; }
+/* the fold-to-pinned toggle sits beside each section's + button; the chevron
+   flips when the section is folded */
+.fold-btn.is-on { color: var(--accent); }
+.collapse-ic { transition: transform var(--t-fast) var(--ease); }
+.fold-btn.is-on .collapse-ic { transform: rotate(180deg); }
 
 .side-list { padding: 0 var(--sp-2); }
 
@@ -542,12 +548,19 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 .chan--private .chan-lock { display: block; }
 
 .chan-name, .dm-name {
+  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   user-select: none;
 }
+
+/* small pin glyph at the end of a pinned row (JS toggles .chan--pinned /
+   .dm--pinned); a pinned row stays put when the rail is collapsed. The row's
+   own gap spaces it from the name and badge. */
+.row-pin { display: none; flex-shrink: 0; color: var(--text-3); opacity: 0.7; }
+.chan--pinned .row-pin, .dm--pinned .row-pin { display: inline-flex; }
 
 /* row states the JS toggles */
 .chan--active .chan-btn, .dm--active .dm-btn {
@@ -727,6 +740,8 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 
 /* muted state shows the slashed bell, dimmed like the muted sidebar rows */
 #mute-btn[aria-pressed="true"] { opacity: 0.55; }
+/* pinned-to-sidebar channel: the header pin lights up in the accent */
+#pin-channel-btn.is-on { color: var(--accent); }
 
 /* phones: the icon row eats the channel title, so it collapses into one "⋯"
    button (see the max-width media query) whose menu lists the live actions.
