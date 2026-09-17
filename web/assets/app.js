@@ -1043,6 +1043,7 @@ async function openChannel(channelId, opts = {}) {
   if (prevId) {
     saveDraftFor(prevId); // keep whatever was typed (edits included) —
     persistDrafts();      // also when re-opening the same channel
+    if (prevId !== channelId) flushMarkRead(); // commit the read we are leaving
   }
   state.currentId = channelId;
   resetComposerMode();
@@ -1156,28 +1157,62 @@ function newestVisible() {
   return state.atBottom;
 }
 
-const maybeMarkRead = debounce(() => {
+// Marking read is debounced (so scrolling does not spam the endpoint), but the
+// debounce must remember WHICH channel it was scheduled for: reading globals
+// at fire time meant opening a channel and switching away within the window
+// left the first one's read unsent, so the server kept counting it and the
+// title stuck at "(1)" for a channel already read. markReadPending is that
+// channel; flushMarkRead commits it now (called when leaving a channel).
+let markReadTimer = 0;
+let markReadPending = 0;
+
+function sendMarkRead(channelId) {
+  const ch = state.channels.get(channelId);
+  if (!ch || !ch.is_member) return;
+  const st = chanState(channelId);
+  const lastId = newestRealId(st);
+  if (!lastId) return;
+  if (state.lastReadSent.get(channelId) === lastId && ch.unread_count === 0) return;
+  state.lastReadSent.set(channelId, lastId);
+  ch.unread_count = 0;
+  // Caught up: drop the "new messages" divider so it doesn't linger once read.
+  // Only the open channel has one in the DOM.
+  if (st.unreadStartId) {
+    st.unreadStartId = null;
+    if (channelId === state.currentId) {
+      const marker = byId('message-list') && byId('message-list').querySelector('.msg--unread-start');
+      if (marker) marker.classList.remove('msg--unread-start');
+    }
+  }
+  renderSidebar();
+  updateBadges();
+  api(`/api/channels/${channelId}/read`, { method: 'POST', body: { last_message_id: lastId }, toast: false })
+    .catch(() => state.lastReadSent.delete(channelId));
+}
+
+// Commit any pending read immediately — used when leaving a channel so a quick
+// switch cannot swallow it.
+function flushMarkRead() {
+  if (!markReadTimer) return;
+  clearTimeout(markReadTimer);
+  markReadTimer = 0;
+  const id = markReadPending;
+  markReadPending = 0;
+  if (id) sendMarkRead(id);
+}
+
+function maybeMarkRead() {
   const ch = state.channels.get(state.currentId);
   if (!ch || !ch.is_member) return;
   if (document.hidden || !document.hasFocus()) return;
   if (!newestVisible()) return;
-  const st = chanState(ch.id);
-  const lastId = newestRealId(st);
-  if (!lastId) return;
-  if (state.lastReadSent.get(ch.id) === lastId && ch.unread_count === 0) return;
-  state.lastReadSent.set(ch.id, lastId);
-  ch.unread_count = 0;
-  // Caught up: drop the "new messages" divider so it doesn't linger once read.
-  if (st.unreadStartId) {
-    st.unreadStartId = null;
-    const marker = byId('message-list') && byId('message-list').querySelector('.msg--unread-start');
-    if (marker) marker.classList.remove('msg--unread-start');
-  }
-  renderSidebar();
-  updateBadges();
-  api(`/api/channels/${ch.id}/read`, { method: 'POST', body: { last_message_id: lastId }, toast: false })
-    .catch(() => state.lastReadSent.delete(ch.id));
-}, 700);
+  // A different channel is waiting to be marked: commit it before this one
+  // takes the single timer slot.
+  if (markReadPending && markReadPending !== ch.id) flushMarkRead();
+  markReadPending = ch.id;
+  clearTimeout(markReadTimer);
+  markReadTimer = setTimeout(flushMarkRead, 700);
+}
 
 function totalUnread() {
   let n = 0;
@@ -5216,6 +5251,7 @@ function wireVisibility() {
       // A grace clock must not tick while nobody is looking (see setOffline).
       clearTimeout(offlineUITimer);
       offlineUITimer = 0;
+      flushMarkRead(); // commit a read in flight before the tab is parked
       return;
     }
     if (!state.connected) {
@@ -5234,6 +5270,7 @@ function wireVisibility() {
   window.addEventListener('pagehide', () => {
     saveDraftFor(state.currentId);
     persistDrafts();
+    flushMarkRead();
   });
 
   // Phone keyboards: when the visual viewport shrinks under a focused
