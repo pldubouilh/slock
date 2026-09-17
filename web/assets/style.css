@@ -802,7 +802,7 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
    cursor pop its toolbar. Never applied on touch — there it blocked the
    touchstart that arms a long-press, so the first press after a scroll was
    eaten. */
-@media (hover: hover) {
+@media (hover: hover) and (pointer: fine) {
   #message-scroll.is-scrolling #message-list { pointer-events: none; }
 }
 .msg:focus-visible { outline: none; }
@@ -976,11 +976,24 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   box-shadow: var(--shadow-1);
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--t-fast) var(--ease);
+  /* Slower fade out; the show side adds a delay (below) so a cursor skating
+     across a busy channel does not flash every bar it passes. */
+  transition: opacity 220ms var(--ease);
+}
+/* Hover reveal ONLY on real-hover devices. On a touchscreen a tap triggers
+   emulated :hover that sticks to the tapped row until another is tapped —
+   scrolling never clears it — so a bare .msg:hover rule would show this menu
+   on tap and leave it stuck through scrolls. There the long-press .msg--held
+   state (unconditional, below) is the only opener. The subtle row tint comes
+   up only while the cursor is actually on the toolbar, to confirm which
+   message an action will hit; the 110ms delay on the bar is the anti-flicker. */
+@media (hover: hover) and (pointer: fine) {
+  .msg:hover .msg-actions { opacity: 1; pointer-events: auto; transition-delay: 110ms; }
+  .msg:has(.msg-actions:hover) { background: color-mix(in srgb, var(--bg-2) 32%, transparent); }
 }
 /* :has(:focus-visible) rather than :focus-within, so keyboard users still get
    the actions but a mouse click does not leave them stuck open. */
-.msg:hover .msg-actions, .msg:has(:focus-visible) .msg-actions {
+.msg:has(:focus-visible) .msg-actions {
   opacity: 1;
   pointer-events: auto;
 }
@@ -2538,22 +2551,26 @@ body.auth-page {
   #lightbox-img { max-height: 70vh; max-height: 70dvh; }
 }
 
-/* Touch devices have no hover, and a tap is deliberately a non-event: taps
-   and scroll-flicks land on messages constantly and must select nothing —
-   text selection included, so the browser's own long-press never fights the
-   app's. A long-press (JS sets .msg--held) is the one gesture that reveals a
-   row's actions, with a tint so the held row is unmistakable; the copy-text
-   action stands in for selecting a message by hand. */
-@media (hover: none) {
+/* The long-press state is UNCONDITIONAL, not gated by a hover media query:
+   .msg--held is only ever added by the touch long-press JS (never on desktop),
+   and some touchscreens misreport `hover: hover`, which used to leave the class
+   styled by nothing so the menu never appeared. Keeping it global guarantees a
+   long-press reveals the toolbar on any device that fires touch events. */
+.msg--held { background: color-mix(in srgb, var(--bg-2) 32%, transparent); }
+.msg--held .msg-actions { opacity: 1; pointer-events: auto; transition: none; }
+
+/* Touch input (coarse pointer OR no hover — either catches a phone the other
+   might miss): a tap is a non-event and must select nothing, text selection
+   included, so the browser's own long-press never fights the app's. The
+   long-press (.msg--held, above) is the one opener; the copy-text action
+   stands in for selecting a message by hand. */
+@media (hover: none), (pointer: coarse) {
   .msg {
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
     -webkit-user-select: none;
     user-select: none;
   }
-  .msg-actions { transition: none; }
-  .msg--held { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
-  .msg--held .msg-actions { opacity: 1; pointer-events: auto; }
 }
 
 /* ==========================================================================

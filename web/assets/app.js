@@ -4843,19 +4843,18 @@ function wireMessageList() {
   // deliberate.
   let holdTimer = 0;
   let holdX = 0, holdY = 0;
+  let holdStartAt = 0;
   let lastScrollAt = 0;
   const cancelHold = () => { clearTimeout(holdTimer); holdTimer = 0; };
   if (sc) {
     sc.addEventListener('scroll', () => {
-      // Scrolling slides rows under a stationary pointer (or a dragging
-      // finger); suppress hover so nothing lights up under it. The class
-      // stays until the pointer genuinely moves again — see below — so
-      // stopping the scroll does not re-select whatever landed under the
-      // cursor.
       sc.classList.add('is-scrolling');
+      // A real scroll: record it (a pending long-press checks this and aborts,
+      // rather than being cancelled here — mobile fires stray scroll events
+      // during a stationary press, e.g. an overscroll bounce, which must not
+      // kill a legitimate hold) and release any menu already shown.
       lastScrollAt = performance.now();
-      cancelHold();     // drop a press still counting down
-      clearHeldMsg();   // and release a row already selected — any scroll clears
+      clearHeldMsg();
       state.atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 48;
       if (state.atBottom && state.currentId) {
         chanState(state.currentId).jumpCount = 0;
@@ -4881,12 +4880,15 @@ function wireMessageList() {
   if (!list) return;
 
   // Touch: a tap on a message is a non-event; the one gesture that reveals a
-  // row's actions is a long press — hold ~0.85s roughly in place and the
-  // toolbar appears there and then (finger still down), staying until another
-  // spot is tapped or the list is scrolled. Any real movement before it fires
-  // is a scroll and cancels it, so scrolling never selects. CSS turns text
-  // selection and the native callout off on rows (hover:none media); images
-  // are skipped so their own long-press (save / share) stays clean.
+  // row's actions is a long press — hold ~0.65s roughly in place and the
+  // toolbar appears (finger still down), staying until another spot is tapped
+  // or the list is scrolled. The press is cancelled ONLY by real finger
+  // movement (touchmove past a threshold); it deliberately does NOT trust
+  // touchcancel or scroll events to cancel it, because mobile fires those
+  // spuriously during a stationary press and that was silently killing every
+  // hold. Instead the timer, when it fires, aborts if a genuine scroll landed
+  // after the press began. CSS disables text selection / callout on touch;
+  // images are skipped so their own long-press (save / share) stays clean.
   list.addEventListener('touchstart', (e) => {
     cancelHold();
     if (e.touches.length !== 1) return;
@@ -4900,30 +4902,30 @@ function wireMessageList() {
     const t = e.touches[0];
     holdX = t.clientX;
     holdY = t.clientY;
+    holdStartAt = performance.now();
     holdTimer = setTimeout(() => {
       holdTimer = 0;
+      if (lastScrollAt > holdStartAt) return; // the list scrolled: not a hold
       clearHeldMsg();
-      row.classList.add('msg--held'); // reveal now, finger still down
+      row.classList.add('msg--held');
       if (navigator.vibrate) navigator.vibrate(15);
-    }, 850);
+    }, 650);
   }, { passive: true });
   list.addEventListener('touchmove', (e) => {
     if (!e.touches[0]) return;
     const t = e.touches[0];
     if (Math.abs(t.clientX - holdX) <= 12 && Math.abs(t.clientY - holdY) <= 12) return;
-    // The finger moved for real: cancel a press still counting down, and
-    // release a menu already shown — this is the reliable "scrolling clears
-    // it" signal, since a drag near an end (or in a short channel) fires no
-    // scroll event at all.
+    // Real movement: this is a scroll/drag, not a hold. Cancel a pending press
+    // and release a menu already shown (a drag near a list end, or in a short
+    // channel, fires no scroll event, so this is the reliable clear signal).
     cancelHold();
     clearHeldMsg();
   }, { passive: true });
+  // A clean lift before the timer fires just means "no hold"; after it fires
+  // the menu is already up and stays. touchcancel does NOT cancel a pending
+  // hold (mobile fires it spuriously) — it only dismisses a shown menu.
   list.addEventListener('touchend', cancelHold, { passive: true });
-  // touchcancel means the browser took the gesture over — nearly always to
-  // scroll. That is exactly when a shown menu must let go, and it is the
-  // signal mobile fires INSTEAD of touchmove when it starts scrolling, so
-  // clearing here is what actually releases the selection on a scroll.
-  list.addEventListener('touchcancel', () => { cancelHold(); clearHeldMsg(); }, { passive: true });
+  list.addEventListener('touchcancel', clearHeldMsg, { passive: true });
 
   list.addEventListener('click', (e) => {
     const msgEl = e.target.closest('.msg');

@@ -139,9 +139,12 @@ write `textContent` on the avatar element itself — that would delete the image
     body-less messages), `.msg-edit`, `.msg-delete`, `.msg-copy` (copies the
     raw message text; hidden for body-less messages), `.msg-link` (copies a
     deep link to the message). On touch devices the toolbar shows only on a
-    long-press (hold ~0.85s roughly in place — the toolbar appears there and
+    long-press (hold ~0.65s roughly in place — the toolbar appears there and
     then, finger still down; JS sets `.msg--held` on the row, cleared by the
-    next tap elsewhere or any scroll); taps are non-events
+    next tap elsewhere or any scroll); taps are non-events. The `.msg--held`
+    reveal is unconditional (not gated by a hover media query) because some
+    touchscreens misreport `hover: hover`; the `:hover` reveal is gated to
+    `(hover: hover) and (pointer: fine)` so emulated hover never opens it
     and text selection is disabled on rows there — `.msg-copy` is the way to
     copy a message on a phone
   - clicking `.msg-author` or `.msg-avatar` opens the author's DM (pointer
