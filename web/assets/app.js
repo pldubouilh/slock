@@ -4854,7 +4854,8 @@ function wireMessageList() {
       // cursor.
       sc.classList.add('is-scrolling');
       lastScrollAt = performance.now();
-      cancelHold();
+      cancelHold();     // drop a press still counting down
+      clearHeldMsg();   // and release a row already selected — any scroll clears
       state.atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 48;
       if (state.atBottom && state.currentId) {
         chanState(state.currentId).jumpCount = 0;
@@ -4880,12 +4881,12 @@ function wireMessageList() {
   if (!list) return;
 
   // Touch: a tap on a message is a non-event; the one gesture that reveals a
-  // row's actions is a long press — hold ~0.6s roughly in place and the
+  // row's actions is a long press — hold ~0.85s roughly in place and the
   // toolbar appears there and then (finger still down), staying until another
-  // spot is tapped. Any real movement before it fires is a scroll and cancels
-  // it, so scrolling never selects. CSS turns text selection and the native
-  // callout off on rows (hover:none media); images are skipped so their own
-  // long-press (save / share) stays clean.
+  // spot is tapped or the list is scrolled. Any real movement before it fires
+  // is a scroll and cancels it, so scrolling never selects. CSS turns text
+  // selection and the native callout off on rows (hover:none media); images
+  // are skipped so their own long-press (save / share) stays clean.
   list.addEventListener('touchstart', (e) => {
     cancelHold();
     if (e.touches.length !== 1) return;
@@ -4904,15 +4905,25 @@ function wireMessageList() {
       clearHeldMsg();
       row.classList.add('msg--held'); // reveal now, finger still down
       if (navigator.vibrate) navigator.vibrate(15);
-    }, 600);
+    }, 850);
   }, { passive: true });
   list.addEventListener('touchmove', (e) => {
-    if (!holdTimer) return;
+    if (!e.touches[0]) return;
     const t = e.touches[0];
-    if (Math.abs(t.clientX - holdX) > 12 || Math.abs(t.clientY - holdY) > 12) cancelHold();
+    if (Math.abs(t.clientX - holdX) <= 12 && Math.abs(t.clientY - holdY) <= 12) return;
+    // The finger moved for real: cancel a press still counting down, and
+    // release a menu already shown — this is the reliable "scrolling clears
+    // it" signal, since a drag near an end (or in a short channel) fires no
+    // scroll event at all.
+    cancelHold();
+    clearHeldMsg();
   }, { passive: true });
   list.addEventListener('touchend', cancelHold, { passive: true });
-  list.addEventListener('touchcancel', cancelHold, { passive: true });
+  // touchcancel means the browser took the gesture over — nearly always to
+  // scroll. That is exactly when a shown menu must let go, and it is the
+  // signal mobile fires INSTEAD of touchmove when it starts scrolling, so
+  // clearing here is what actually releases the selection on a scroll.
+  list.addEventListener('touchcancel', () => { cancelHold(); clearHeldMsg(); }, { passive: true });
 
   list.addEventListener('click', (e) => {
     const msgEl = e.target.closest('.msg');

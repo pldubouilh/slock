@@ -793,17 +793,15 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   padding: 5px var(--sp-4);
   transition: background var(--t-fast) var(--ease);
 }
-/* Hover only, and only on devices that really hover: on touch screens the
-   browser's emulated hover would leave the tint stuck on the last-tapped row —
-   there, the long-press .msg--held state (further down) is the equivalent. */
-@media (hover: hover) {
-  .msg:hover { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
-}
+/* Desktop hover reveals a row's action toolbar (see .msg:hover .msg-actions
+   below) but deliberately no background tint — the full-row highlight read as
+   too heavy. Touch has no hover; there the long-press .msg--held state is the
+   equivalent, and it does tint so the held row is unmistakable. */
 
-/* Desktop only: while the list is moving, don't let hover light up whatever
-   row slides under a stationary cursor. Never applied on touch — there it
-   blocked the touchstart that arms a long-press, so the first press after any
-   scroll was eaten. */
+/* Desktop only: while the list is moving, don't let the row under a stationary
+   cursor pop its toolbar. Never applied on touch — there it blocked the
+   touchstart that arms a long-press, so the first press after a scroll was
+   eaten. */
 @media (hover: hover) {
   #message-scroll.is-scrolling #message-list { pointer-events: none; }
 }
@@ -885,21 +883,10 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 /* consecutive messages from the same author collapse */
 .msg--compact { padding-block: 2px; }
 .msg--compact .msg-avatar { display: none; }
-.msg--compact .msg-head {
-  position: absolute;
-  inset-inline-start: 0;
-  top: 8px;
-  left: 7px;
-  width: calc(var(--sp-4) + 38px);
-  justify-content: center;
-}
-.msg--compact .msg-author, .msg--compact .msg-edited { display: none; }
-.msg--compact .msg-time {
-  font-size: 10px;
-  opacity: 0;
-  transition: opacity var(--t-fast) var(--ease);
-}
-.msg--compact:hover .msg-time { opacity: 1; }
+/* Grouped rows drop the whole head: no avatar, no repeated author, and no
+   gutter timestamp (it read as noisy). The message's own header row still
+   carries the time; a grouped row shows only its body. */
+.msg--compact .msg-head { display: none; }
 
 /* compact view (device-local display option, #density-btn): no avatar
    column, author + time floated inline before the text so each message is
@@ -918,8 +905,6 @@ body.density-compact .msg-head {
 /* code blocks and quotes start on their own line, clear of the floated head */
 body.density-compact .msg-body pre,
 body.density-compact .msg-body blockquote { clear: inline-start; }
-/* grouped rows: the gutter the hover-time lived in is gone — drop the head */
-body.density-compact .msg--compact .msg-head { display: none; }
 
 /* variants */
 /*.msg--own .msg-author { color: var(--accent); }*/
@@ -2520,7 +2505,6 @@ body.auth-page {
       "used  used   used";
   }
   .msg { padding-inline: var(--sp-3); }
-  .msg--compact .msg-head { width: calc(var(--sp-3) + 38px); }
   .msg--unread-start::before { inset-inline-end: var(--sp-3); }
   .msg-actions { inset-inline-end: var(--sp-3); }
   .composer-area { padding-inline: var(--sp-3); }
@@ -2570,7 +2554,6 @@ body.auth-page {
   .msg-actions { transition: none; }
   .msg--held { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
   .msg--held .msg-actions { opacity: 1; pointer-events: auto; }
-  .msg--compact.msg--held .msg-time { opacity: 1; }
 }
 
 /* ==========================================================================
