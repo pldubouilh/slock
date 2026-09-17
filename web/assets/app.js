@@ -2463,6 +2463,12 @@ function connectSSE() {
     updateBadges();
   });
 
+  // An admin changed this user's channel allowlist: pull a fresh list so newly
+  // allowed channels appear and now-forbidden ones drop out (refetchChannels
+  // prunes channels the server no longer returns). If the open channel just
+  // became off-limits, leave it — the next fetch there 403s and the user moves.
+  es.addEventListener('channels.resync', () => { refetchChannels(); });
+
   es.addEventListener('channel.update', (e) => {
     mergeChannel(JSON.parse(e.data).channel);
     renderSidebar();
@@ -3928,6 +3934,17 @@ function openPasswordModal(forced = false) {
   if (blockedOffline('Changing your password')) return;
   const m = openModal('tpl-modal-password', { forced });
   if (!m) return;
+  // First login (forced) also collects the display name the admin no longer
+  // sets at creation. Prefilled with the email-derived placeholder so the user
+  // can just confirm or edit it. A voluntary change hides the field entirely.
+  const nameField = m.q('.pw-name-field');
+  const nameInput = m.q('[name=display_name]');
+  if (forced && nameField) {
+    nameField.hidden = false;
+    if (nameInput) nameInput.value = (state.me && state.me.display_name) || '';
+    const note = m.q('.modal-note');
+    if (note) note.textContent = 'Welcome! Choose your display name and a password (at least 8 characters).';
+  }
   const form = m.q('form') || m.q('.mform');
   on(form, 'submit', async (e) => {
     e.preventDefault();
@@ -3935,6 +3952,11 @@ function openPasswordModal(forced = false) {
     const nw = m.q('[name=new_password]');
     const conf = m.q('[name=confirm_password]');
     formError(m, '');
+    const name = nameInput ? nameInput.value.trim() : '';
+    if (forced && !name) {
+      formError(m, 'Please choose a display name.');
+      return;
+    }
     if (!nw || nw.value.length < 8) {
       formError(m, 'New password must be at least 8 characters.');
       return;
@@ -3947,12 +3969,22 @@ function openPasswordModal(forced = false) {
       await api('/api/auth/password', {
         method: 'POST',
         toast: false,
-        body: { current_password: cur ? cur.value : '', new_password: nw.value },
+        body: {
+          current_password: cur ? cur.value : '',
+          new_password: nw.value,
+          ...(forced ? { display_name: name } : {}),
+        },
       });
+      if (forced && name && state.me) {
+        state.me.display_name = name;
+        state.users.set(state.me.id, state.me);
+        renderSidebar();
+        renderMeChip();
+      }
       state.mustChangePw = false;
       m.forced = false;
       m.close();
-      toast('Password updated');
+      toast(forced ? 'Welcome to slock!' : 'Password updated');
     } catch (err) {
       formError(m, err.message);
     }
@@ -3990,6 +4022,8 @@ function adminRow(user) {
   const self = state.me && user.id === state.me.id;
   setToggle('.arow-admin-toggle', user.is_admin, self);
   setToggle('.arow-active-toggle', user.is_active, self);
+  const allowed = row.querySelector('.arow-allowed');
+  if (allowed) allowed.value = user.allowed_channels || '*';
   return row;
 }
 
@@ -4069,6 +4103,29 @@ async function openAdminModal() {
           const data = await api(`/api/admin/users/${uid}/reset-password`, { method: 'POST' });
           showAdminResult(m, `Temporary password for ${user.display_name}:`, data.temp_password);
         } catch { /* toasted */ }
+      }
+    });
+
+    // Channel allowlist edits commit on blur / Enter (change), not per keystroke.
+    tbody.addEventListener('change', async (e) => {
+      const input = e.target.closest('.arow-allowed');
+      if (!input) return;
+      const row = e.target.closest('[data-user-id]');
+      const uid = Number(row && row.dataset.userId);
+      const user = users.find((u) => u.id === uid);
+      if (!user) return;
+      const value = input.value.trim() || '*';
+      if (value === (user.allowed_channels || '*')) return;
+      try {
+        const data = await api(`/api/admin/users/${uid}`, {
+          method: 'PATCH', body: { allowed_channels: value },
+        });
+        Object.assign(user, data.user);
+        input.value = user.allowed_channels || '*'; // reflect server normalisation
+        const scope = input.value === '*' ? 'all channels' : input.value;
+        toast(`${user.display_name} can now access ${scope}`);
+      } catch {
+        input.value = user.allowed_channels || '*';
       }
     });
   }
@@ -4181,16 +4238,18 @@ async function openAdminModal() {
         toast: false,
         body: {
           email: String(fd.get('email') || '').trim(),
-          display_name: String(fd.get('display_name') || '').trim(),
           is_admin: !!fd.get('is_admin'),
           limit_history: !!fd.get('limit_history'),
+          allowed_channels: String(fd.get('allowed_channels') || '*').trim() || '*',
         },
       });
       users.unshift(data.user);
       state.users.set(data.user.id, data.user);
       render();
       form.reset();
-      showAdminResult(m, `${data.user.display_name} created — temporary password:`, data.temp_password);
+      const ac = form.querySelector('[name=allowed_channels]');
+      if (ac) ac.value = '*'; // reset() clears the value= default
+      toast(`${data.user.email} created`);
     } catch (err) {
       formError(m, err.message);
     }

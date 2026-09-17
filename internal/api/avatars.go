@@ -56,6 +56,7 @@ func (s *Server) setAvatar(w http.ResponseWriter, r *http.Request, userID int64,
 	public := u
 	public.Email = ""
 	public.MustChangePW = false
+	public.AllowedChannels = ""
 	s.Hub.PublishAll(realtime.Event{Type: "user.update", Data: map[string]any{"user": public}})
 
 	httpx.JSON(w, http.StatusOK, map[string]any{"user": u})

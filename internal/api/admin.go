@@ -43,29 +43,59 @@ func (s *Server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) er
 	return nil
 }
 
+// placeholderName derives a legible stand-in display name from an email until
+// the user sets their own on first login: the local part, capped.
+func placeholderName(email string) string {
+	name := email
+	if at := strings.IndexByte(email, '@'); at > 0 {
+		name = email[:at]
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "New user"
+	}
+	if utf8.RuneCountInString(name) > maxDisplayNameLen {
+		r := []rune(name)
+		name = string(r[:maxDisplayNameLen])
+	}
+	return name
+}
+
 // handleAdminCreateUser creates a user with a generated temporary password,
 // auto-joins #general, returns the password once, and mails a welcome
 // best-effort when SendGrid is configured.
 func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) error {
 	var in struct {
-		Email       string `json:"email"`
+		Email   string `json:"email"`
+		IsAdmin bool   `json:"is_admin"`
+		// DisplayName is optional now: the web UI omits it (the user picks a
+		// name on first login), but the CLI and any older client may still send
+		// one, in which case it is used as the initial name.
 		DisplayName string `json:"display_name"`
-		IsAdmin     bool   `json:"is_admin"`
 		// LimitHistory hides everything said before this account existed:
 		// history pages, search, pins, attachment lists, unread counts.
 		LimitHistory bool `json:"limit_history"`
+		// AllowedChannels restricts a "limited" user to named channels ("*" or
+		// blank = every channel). DMs are never restricted.
+		AllowedChannels string `json:"allowed_channels"`
 	}
 	if err := httpx.DecodeJSON(w, r, &in); err != nil {
 		return err
 	}
 	email := strings.TrimSpace(in.Email)
-	name := strings.TrimSpace(in.DisplayName)
 	if !looksLikeEmail(email) {
 		return httpx.BadRequest("A valid email address is required.")
 	}
-	if name == "" || utf8.RuneCountInString(name) > maxDisplayNameLen {
+	// A supplied name wins; otherwise a placeholder derived from the email
+	// stands in until the user chooses one on first login (keeps the NOT NULL
+	// column and the UI legible).
+	name := strings.TrimSpace(in.DisplayName)
+	if name == "" {
+		name = placeholderName(email)
+	} else if utf8.RuneCountInString(name) > maxDisplayNameLen {
 		return httpx.BadRequest("Display name must be 1 to 60 characters.")
 	}
+	allowed := normalizeAllowedChannels(in.AllowedChannels)
 
 	tempPassword, err := newToken(tempPasswordBytes)
 	if err != nil {
@@ -78,10 +108,10 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) e
 
 	var u db.User
 	row := s.DB.Pool.QueryRow(r.Context(),
-		`INSERT INTO users (email, display_name, password_hash, avatar_color, is_admin, must_change_pw, history_cutoff)
-		 VALUES ($1, $2, $3, $4, $5, TRUE, CASE WHEN $6 THEN now() END)
+		`INSERT INTO users (email, display_name, password_hash, avatar_color, is_admin, must_change_pw, history_cutoff, allowed_channels)
+		 VALUES ($1, $2, $3, $4, $5, TRUE, CASE WHEN $6 THEN now() END, $7)
 		 RETURNING `+userColumnsBare,
-		email, name, hash, avatarColorFor(email), in.IsAdmin, in.LimitHistory)
+		email, name, hash, avatarColorFor(email), in.IsAdmin, in.LimitHistory, allowed)
 	if err := scanUserRow(row, &u); err != nil {
 		if isUniqueViolation(err) {
 			return httpx.Conflict("That email address is already registered.")
@@ -89,12 +119,16 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) e
 		return err
 	}
 
-	// Everyone starts in #general when it exists.
-	if _, err := s.DB.Pool.Exec(r.Context(),
-		`INSERT INTO channel_members (channel_id, user_id)
-		 SELECT c.id, $1::bigint FROM channels c WHERE c.kind = 'channel' AND lower(c.name) = 'general'
-		 ON CONFLICT DO NOTHING`, u.ID); err != nil {
-		log.Printf("api: auto-join general for user %d: %v", u.ID, err)
+	// Everyone starts in #general when it exists — unless a limited user's
+	// allowlist excludes it (membership is kept in step with access so realtime
+	// never reaches a channel the user cannot open).
+	if u.ChannelAllowed("general") {
+		if _, err := s.DB.Pool.Exec(r.Context(),
+			`INSERT INTO channel_members (channel_id, user_id)
+			 SELECT c.id, $1::bigint FROM channels c WHERE c.kind = 'channel' AND lower(c.name) = 'general'
+			 ON CONFLICT DO NOTHING`, u.ID); err != nil {
+			log.Printf("api: auto-join general for user %d: %v", u.ID, err)
+		}
 	}
 
 	s.sendWelcome(u.Email, u.DisplayName, tempPassword)
@@ -115,14 +149,15 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) e
 		return err
 	}
 	var in struct {
-		DisplayName *string `json:"display_name"`
-		IsAdmin     *bool   `json:"is_admin"`
-		IsActive    *bool   `json:"is_active"`
+		DisplayName     *string `json:"display_name"`
+		IsAdmin         *bool   `json:"is_admin"`
+		IsActive        *bool   `json:"is_active"`
+		AllowedChannels *string `json:"allowed_channels"`
 	}
 	if err := httpx.DecodeJSON(w, r, &in); err != nil {
 		return err
 	}
-	if in.DisplayName == nil && in.IsAdmin == nil && in.IsActive == nil {
+	if in.DisplayName == nil && in.IsAdmin == nil && in.IsActive == nil && in.AllowedChannels == nil {
 		return httpx.BadRequest("Nothing to update.")
 	}
 	if in.DisplayName != nil {
@@ -131,6 +166,10 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) e
 			return httpx.BadRequest("Display name must be 1 to 60 characters.")
 		}
 		in.DisplayName = &name
+	}
+	if in.AllowedChannels != nil {
+		normalized := normalizeAllowedChannels(*in.AllowedChannels)
+		in.AllowedChannels = &normalized
 	}
 
 	me := currentUser(r)
@@ -146,17 +185,36 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) e
 	var u db.User
 	row := s.DB.Pool.QueryRow(r.Context(),
 		`UPDATE users SET
-			display_name = COALESCE($2::text, display_name),
-			is_admin     = COALESCE($3::boolean, is_admin),
-			is_active    = COALESCE($4::boolean, is_active)
+			display_name     = COALESCE($2::text, display_name),
+			is_admin         = COALESCE($3::boolean, is_admin),
+			is_active        = COALESCE($4::boolean, is_active),
+			allowed_channels = COALESCE($5::text, allowed_channels)
 		 WHERE id = $1
 		 RETURNING `+userColumnsBare,
-		id, in.DisplayName, in.IsAdmin, in.IsActive)
+		id, in.DisplayName, in.IsAdmin, in.IsActive, in.AllowedChannels)
 	if err := scanUserRow(row, &u); err != nil {
 		if isNoRows(err) {
 			return httpx.ErrNotFound
 		}
 		return err
+	}
+
+	// Tightening the allowlist drops memberships in now-forbidden named channels
+	// so access and membership stay in step (otherwise realtime would keep
+	// reaching a channel the user can no longer open). DMs are never touched.
+	if in.AllowedChannels != nil {
+		if allowAll, allowed := u.AllowedChannelsSQL(); !allowAll {
+			if _, err := s.DB.Pool.Exec(r.Context(),
+				`DELETE FROM channel_members cm USING channels c
+				  WHERE cm.user_id = $1 AND cm.channel_id = c.id
+				    AND c.kind = 'channel' AND NOT (c.name = ANY($2::text[]))`,
+				u.ID, allowed); err != nil {
+				return err
+			}
+		}
+		// Nudge the affected user's own clients to refresh their channel list so
+		// the change is live, not pending a reconnect.
+		s.Hub.PublishUser(u.ID, realtime.Event{Type: "channels.resync", Data: map[string]any{}})
 	}
 
 	if !u.IsActive {
@@ -172,6 +230,7 @@ func (s *Server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) e
 	public := u
 	public.Email = ""
 	public.MustChangePW = false
+	public.AllowedChannels = "" // a user's allowlist is not other users' business
 	s.Hub.PublishAll(realtime.Event{Type: "user.update", Data: map[string]any{"user": public}})
 
 	httpx.JSON(w, http.StatusOK, map[string]any{"user": u})

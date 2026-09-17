@@ -56,7 +56,7 @@ Attachment URLs are built client-side:
 | POST | `/api/auth/login` | `{email, password}` | `200 {user, must_change_pw}` + sets cookie |
 | POST | `/api/auth/logout` | – | `204` |
 | GET | `/api/auth/me` | – | `200 {user, must_change_pw, push_public_key}` |
-| POST | `/api/auth/password` | `{current_password, new_password}` | `204` |
+| POST | `/api/auth/password` | `{current_password, new_password, display_name?}` | `204` |
 | POST | `/api/auth/forgot` | `{email}` | `204` always (no account enumeration) |
 | POST | `/api/auth/reset` | `{token, new_password}` | `204` |
 
@@ -232,6 +232,7 @@ channel with `after=<last known id>`.
 | `channel.members` | `{channel_id, members: [id], member_count}` |
 | `channel.read` | `{channel_id, last_read_message_id}` — from your other tabs |
 | `channel.mute` | `{channel_id, muted}` — from your other tabs |
+| `channels.resync` | `{}` — your channel allowlist changed; refetch `/api/channels` |
 | `workspace.update` | `{workspace: {name, icon_url}}` — admin changed the branding |
 | `typing` | `{channel_id, user_id}` |
 | `presence` | `{user_id, online: bool}` |
@@ -339,17 +340,29 @@ leaves the bot and its messages: removing the user would erase history.
 | Method | Path | Body | Response |
 |---|---|---|---|
 | GET | `/api/admin/users` | – | `200 {users: [User]}` — includes inactive, with emails |
-| POST | `/api/admin/users` | `{email, display_name, is_admin?, limit_history?}` | `201 {user, temp_password}` |
-| PATCH | `/api/admin/users/{id}` | `{display_name?, is_admin?, is_active?}` | `200 {user}` |
+| POST | `/api/admin/users` | `{email, is_admin?, limit_history?, allowed_channels?}` | `201 {user, temp_password}` |
+| PATCH | `/api/admin/users/{id}` | `{display_name?, is_admin?, is_active?, allowed_channels?}` | `200 {user}` |
 | POST | `/api/admin/users/{id}/reset-password` | – | `200 {temp_password}` |
 
 New users get a random temporary password returned **once** to the admin (the
-plan is that the admin passes it on by hand) and `must_change_pw = true`. If
-SendGrid is configured a welcome mail is also attempted, best-effort. New users
-are auto-joined to `#general`. Admins cannot deactivate or demote themselves.
+plan is that the admin passes it on by hand) and `must_change_pw = true`.
+Creation does **not** set a display name: the user chooses it on first login,
+in the same forced flow that changes the password (`POST /api/auth/password`
+accepts `display_name`, required while `must_change_pw`). Until then a
+placeholder derived from the email stands in. If SendGrid is configured a
+welcome mail is also attempted, best-effort. New users are auto-joined to
+`#general` (unless their allowlist excludes it). Admins cannot deactivate or
+demote themselves.
 
 `limit_history: true` stamps `users.history_cutoff` with the account's
 creation time: that user never sees messages created before it — history
 pages, search, pins, attachment lists and unread counts all exclude them,
 server-side. The flag is set at creation only and never exposed on the wire;
 clearing it later is a manual `UPDATE users SET history_cutoff = NULL`.
+
+`allowed_channels` restricts a "limited" user to a set of channels: `*` (the
+default) means no restriction, otherwise a comma-separated list of channel
+names (stored lowercased, space-free). The user can only see, open, join, create, post to, search or receive realtime for named channels on the list — enforced server-side on the channel list, `requireMembership` (every read path), search, create, join, post (which would otherwise auto-join a public channel), add-member and channel announcements. DMs are never restricted. Editable any time via
+PATCH; tightening it also drops the user's memberships in now-forbidden
+channels. The value is exposed only to admins and to the user themselves;
+`user.update` broadcasts to others omit it.

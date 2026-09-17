@@ -76,7 +76,7 @@ func (s *Server) handleListChannelAttachments(w http.ResponseWriter, r *http.Req
 		return err
 	}
 	ctx := r.Context()
-	if err := s.requireMembership(ctx, id, me.ID); err != nil {
+	if err := s.requireMembership(ctx, id, me); err != nil {
 		return err
 	}
 
@@ -241,7 +241,7 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) error {
 		if deletedAt != nil {
 			return httpx.ErrNotFound
 		}
-		if err := s.requireMembership(r.Context(), *channelID, me.ID); err != nil {
+		if err := s.requireMembership(r.Context(), *channelID, me); err != nil {
 			return err
 		}
 	}

@@ -1701,7 +1701,18 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   from { opacity: 0; transform: translateY(10px) scale(0.98); }
 }
 
-.modal--admin { width: min(720px, 100%); }
+.modal--admin { width: min(920px, 100%); }
+.arow-allowed {
+  width: 100%;
+  min-width: 90px;
+  font-size: var(--fs-s);
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-s);
+  background: var(--bg-1);
+  color: var(--text-1);
+}
+.arow-allowed:focus { outline: none; border-color: var(--accent); }
 .modal--confirm { width: min(380px, 100%); }
 .modal--forced .modal-close { display: none; }
 

@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"slock/internal/db"
 	"slock/internal/httpx"
 	"slock/internal/password"
+	"slock/internal/realtime"
 )
 
 const (
@@ -30,15 +32,15 @@ const (
 // userColumnsBare is the same list for INSERT/UPDATE ... RETURNING.
 const (
 	userColumns = `u.id, u.email, u.display_name, u.avatar_color, u.status_text,
-		u.is_admin, u.is_active, u.is_bot, u.must_change_pw, u.created_at, u.last_seen_at, u.avatar_sha, u.history_cutoff`
+		u.is_admin, u.is_active, u.is_bot, u.must_change_pw, u.created_at, u.last_seen_at, u.avatar_sha, u.history_cutoff, u.allowed_channels`
 	userColumnsBare = `id, email, display_name, avatar_color, status_text,
-		is_admin, is_active, is_bot, must_change_pw, created_at, last_seen_at, avatar_sha, history_cutoff`
+		is_admin, is_active, is_bot, must_change_pw, created_at, last_seen_at, avatar_sha, history_cutoff, allowed_channels`
 )
 
 // scanUserRow reads a row selected with userColumns.
 func scanUserRow(row pgx.Row, u *db.User) error {
 	if err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarColor, &u.StatusText,
-		&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &u.HistoryCutoff); err != nil {
+		&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &u.HistoryCutoff, &u.AllowedChannels); err != nil {
 		return err
 	}
 	u.SetAvatarURL()
@@ -140,7 +142,7 @@ func (s *Server) lookupSession(ctx context.Context, token string) (*db.User, err
 		 FROM sessions s JOIN users u ON u.id = s.user_id
 		 WHERE s.token_hash = $1`, hashToken(token))
 	err := row.Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarColor, &u.StatusText,
-		&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &u.HistoryCutoff, &expiresAt)
+		&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &u.HistoryCutoff, &u.AllowedChannels, &expiresAt)
 	if err != nil {
 		if isNoRows(err) {
 			return nil, httpx.ErrUnauthorized
@@ -187,7 +189,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) error {
 		`SELECT `+userColumns+`, u.password_hash FROM users u
 			 WHERE lower(u.email) = lower($1) AND NOT u.is_bot`, in.Email).
 		Scan(&u.ID, &u.Email, &u.DisplayName, &u.AvatarColor, &u.StatusText,
-			&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &u.HistoryCutoff, &hash)
+			&u.IsAdmin, &u.IsActive, &u.IsBot, &u.MustChangePW, &u.CreatedAt, &u.LastSeenAt, &u.AvatarSHA, &u.HistoryCutoff, &u.AllowedChannels, &hash)
 	u.SetAvatarURL()
 	if err != nil {
 		if !isNoRows(err) {
@@ -254,6 +256,10 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) er
 	var in struct {
 		CurrentPassword string `json:"current_password"`
 		NewPassword     string `json:"new_password"`
+		// DisplayName is set on first login (must_change_pw), where the same
+		// modal collects the name the admin no longer sets at creation. Ignored
+		// for a voluntary password change (the profile modal owns the name then).
+		DisplayName string `json:"display_name"`
 	}
 	if err := httpx.DecodeJSON(w, r, &in); err != nil {
 		return err
@@ -262,6 +268,17 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) er
 		return err
 	}
 	u := currentUser(r)
+
+	// Only the forced first-login flow may set the name here, and only then is
+	// it required — a voluntary change leaves the existing name untouched.
+	var namePtr *string
+	if u.MustChangePW {
+		name := strings.TrimSpace(in.DisplayName)
+		if name == "" || utf8.RuneCountInString(name) > maxDisplayNameLen {
+			return httpx.BadRequest("Please choose a display name (1 to 60 characters).")
+		}
+		namePtr = &name
+	}
 
 	var hash string
 	if err := s.DB.Pool.QueryRow(r.Context(),
@@ -277,8 +294,21 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) er
 		return err
 	}
 	if _, err := s.DB.Pool.Exec(r.Context(),
-		`UPDATE users SET password_hash = $2, must_change_pw = FALSE WHERE id = $1`, u.ID, newHash); err != nil {
+		`UPDATE users SET password_hash = $2, must_change_pw = FALSE,
+		        display_name = COALESCE($3::text, display_name) WHERE id = $1`,
+		u.ID, newHash, namePtr); err != nil {
 		return err
+	}
+	// A fresh name must reach other clients' caches so messages relabel.
+	if namePtr != nil {
+		var pub db.User
+		if err := scanUserRow(s.DB.Pool.QueryRow(r.Context(),
+			`SELECT `+userColumnsBare+` FROM users WHERE id = $1`, u.ID), &pub); err == nil {
+			pub.Email = ""
+			pub.MustChangePW = false
+			pub.AllowedChannels = ""
+			s.Hub.PublishAll(realtime.Event{Type: "user.update", Data: map[string]any{"user": pub}})
+		}
 	}
 
 	// Keep this session alive, drop every other one.

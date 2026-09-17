@@ -155,6 +155,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 	// sees messages older than their account, search included.
 	where = append(where,
 		`m.created_at >= COALESCE((SELECT history_cutoff FROM users WHERE id = $1), '-infinity'::timestamptz)`)
+	// Per-user channel allowlist: a "limited" user never matches messages in a
+	// channel outside its list. DMs are never restricted.
+	if allowAll, allowed := me.AllowedChannelsSQL(); !allowAll {
+		where = append(where, "(c.kind = 'dm' OR c.name = ANY("+arg(allowed)+"::text[]))")
+	}
 
 	snippet := "left(m.body, 400)"
 	if q.Text != "" {

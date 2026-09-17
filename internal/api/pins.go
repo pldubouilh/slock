@@ -39,7 +39,7 @@ func (s *Server) pinTarget(r *http.Request) (messageID, channelID int64, err err
 	if deletedAt != nil {
 		return 0, 0, httpx.BadRequest("That message was deleted.")
 	}
-	if err := s.requireMembership(ctx, channelID, me.ID); err != nil {
+	if err := s.requireMembership(ctx, channelID, me); err != nil {
 		return 0, 0, err
 	}
 	return messageID, channelID, nil
@@ -98,7 +98,7 @@ func (s *Server) handleListPins(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	ctx := r.Context()
-	if err := s.requireMembership(ctx, id, me.ID); err != nil {
+	if err := s.requireMembership(ctx, id, me); err != nil {
 		return err
 	}
 

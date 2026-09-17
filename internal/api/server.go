@@ -260,21 +260,26 @@ func (s *Server) isMember(ctx context.Context, channelID, userID int64) (bool, e
 // requireMembership returns ErrForbidden unless the user is in the channel.
 // Public channels are readable by anyone signed in; private channels and DMs
 // require membership.
-func (s *Server) requireMembership(ctx context.Context, channelID, userID int64) error {
-	var kind string
+func (s *Server) requireMembership(ctx context.Context, channelID int64, user *db.User) error {
+	var kind, name string
 	var private bool
 	err := s.DB.Pool.QueryRow(ctx,
-		`SELECT kind, is_private FROM channels WHERE id = $1`, channelID).Scan(&kind, &private)
+		`SELECT kind, name, is_private FROM channels WHERE id = $1`, channelID).Scan(&kind, &name, &private)
 	if err != nil {
 		if isNoRows(err) {
 			return httpx.ErrNotFound
 		}
 		return err
 	}
+	// A "limited" user is confined to an allowlist of named channels; DMs are
+	// never restricted. This gate sits in front of every read/write path.
+	if kind == db.KindChannel && !user.ChannelAllowed(name) {
+		return httpx.ErrForbidden
+	}
 	if kind == db.KindChannel && !private {
 		return nil
 	}
-	member, err := s.isMember(ctx, channelID, userID)
+	member, err := s.isMember(ctx, channelID, user.ID)
 	if err != nil {
 		return err
 	}

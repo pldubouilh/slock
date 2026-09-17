@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -50,6 +51,42 @@ func normalizeChannelName(raw string) (string, error) {
 		return "", httpx.BadRequest("Channel names are 1-40 characters of letters, numbers, - or _.")
 	}
 	return name, nil
+}
+
+// normalizeChannelToken lowercases one channel name for an allowlist, keeping
+// only the characters normalizeChannelName allows and dropping the rest (a
+// leading '#', spaces). Returns "" for a token with nothing usable.
+func normalizeChannelToken(raw string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(raw)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		}
+	}
+	return strings.Trim(b.String(), "-")
+}
+
+// normalizeAllowedChannels canonicalises an admin's comma-separated allowlist
+// into storage form: "*" (no restriction) or a lowercased, de-duplicated,
+// space-free comma-joined list. Blank, "*", or all-garbage input means "*" so a
+// user is never silently locked out of every channel by a stray keystroke.
+func normalizeAllowedChannels(raw string) string {
+	if raw = strings.TrimSpace(raw); raw == "" || raw == "*" {
+		return "*"
+	}
+	var names []string
+	seen := map[string]bool{}
+	for part := range strings.SplitSeq(raw, ",") {
+		if n := normalizeChannelToken(part); n != "" && !seen[n] {
+			seen[n] = true
+			names = append(names, n)
+		}
+	}
+	if len(names) == 0 {
+		return "*"
+	}
+	return strings.Join(names, ",")
 }
 
 // dmKey is the canonical key for a 1:1 conversation: both ids sorted ascending
@@ -182,9 +219,12 @@ WITH my AS (
       FROM channel_members WHERE user_id = $1
 ), visible AS (
     SELECT c.* FROM channels c
-     WHERE (c.kind = 'channel' AND (NOT c.is_private OR c.id IN (SELECT channel_id FROM my)))
+     WHERE ((c.kind = 'channel' AND (NOT c.is_private OR c.id IN (SELECT channel_id FROM my)))
         OR (c.kind = 'dm' AND c.id IN (SELECT channel_id FROM my)
-            AND (c.last_message_at IS NOT NULL OR c.created_by = $1))
+            AND (c.last_message_at IS NOT NULL OR c.created_by = $1)))
+       -- limited users ($2 false) only see allowlisted named channels; DMs
+       -- are never restricted.
+       AND (c.kind = 'dm' OR $2 OR c.name = ANY($3::text[]))
 ), counts AS (
     SELECT cm.channel_id, count(*) AS member_count
       FROM channel_members cm
@@ -228,12 +268,46 @@ SELECT c.id, c.kind, c.name, c.topic, c.is_private, c.created_by, c.created_at, 
   LEFT JOIN unread ON unread.channel_id = c.id
   LEFT JOIN peers ON peers.channel_id = c.id`, unreadCap)
 
+// announcePublicChannel fans an event about a public channel out to every user
+// whose allowlist permits that channel — unrestricted users and limited users
+// with the name listed. It replaces a blanket PublishAll so a "limited" user is
+// not told about a channel they cannot open. allowed_channels is stored
+// lowercased and space-free (see normalizeAllowedChannels), matching the
+// lowercased channel name.
+func (s *Server) announcePublicChannel(ctx context.Context, channelName string, ev realtime.Event) {
+	rows, err := s.DB.Pool.Query(ctx,
+		`SELECT id FROM users
+		  WHERE allowed_channels = '*'
+		     OR lower($1) = ANY(string_to_array(allowed_channels, ','))`, channelName)
+	if err != nil {
+		log.Printf("api: announce channel %q: %v", channelName, err)
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			log.Printf("api: announce channel %q: %v", channelName, err)
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("api: announce channel %q: %v", channelName, err)
+		return
+	}
+	s.Hub.PublishUsers(ids, ev)
+}
+
 // handleListChannels returns {channels, dms} for the caller: every public
 // channel plus private ones they belong to, and their DM conversations, each
 // with unread_count, member_count and last_message_at.
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) error {
 	me := currentUser(r)
-	rows, err := s.DB.Pool.Query(r.Context(), listChannelsQuery, me.ID)
+	allowAll, allowed := me.AllowedChannelsSQL()
+	rows, err := s.DB.Pool.Query(r.Context(), listChannelsQuery, me.ID, allowAll, allowed)
 	if err != nil {
 		return err
 	}
@@ -290,6 +364,11 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
+	// The creator joins what they create; a limited user must not end up a
+	// member (and live recipient) of a channel outside their allowlist.
+	if !me.ChannelAllowed(name) {
+		return httpx.ErrForbidden
+	}
 	topic := strings.TrimSpace(in.Topic)
 	if len(topic) > 500 {
 		topic = topic[:500]
@@ -333,7 +412,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) err
 		broadcast := *ch
 		broadcast.IsMember = false
 		broadcast.UnreadCount = 0
-		s.Hub.PublishAll(realtime.Event{Type: "channel.new", Data: map[string]any{"channel": broadcast}})
+		s.announcePublicChannel(ctx, ch.Name, realtime.Event{Type: "channel.new", Data: map[string]any{"channel": broadcast}})
 		s.Hub.PublishUser(me.ID, realtime.Event{Type: "channel.new", Data: map[string]any{"channel": ch}})
 	} else {
 		s.publishToChannel(ctx, id, realtime.Event{Type: "channel.new", Data: map[string]any{"channel": ch}}, 0)
@@ -351,7 +430,7 @@ func (s *Server) handleGetChannel(w http.ResponseWriter, r *http.Request) error 
 		return err
 	}
 	ctx := r.Context()
-	if err := s.requireMembership(ctx, id, me.ID); err != nil {
+	if err := s.requireMembership(ctx, id, me); err != nil {
 		return err
 	}
 	ch, err := s.loadChannel(ctx, id, me.ID)
@@ -455,6 +534,9 @@ func (s *Server) handleJoinChannel(w http.ResponseWriter, r *http.Request) error
 	if basics.Kind != db.KindChannel || basics.IsPrivate {
 		return httpx.ErrForbidden
 	}
+	if !me.ChannelAllowed(basics.Name) {
+		return httpx.ErrForbidden // a limited user cannot join outside its allowlist
+	}
 	tag, err := s.DB.Pool.Exec(ctx,
 		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, me.ID)
 	if err != nil {
@@ -533,7 +615,8 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	var active bool
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT is_active FROM users WHERE id = $1`, in.UserID).Scan(&active); err != nil {
+	var allowedChannels string
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT is_active, allowed_channels FROM users WHERE id = $1`, in.UserID).Scan(&active, &allowedChannels); err != nil {
 		if isNoRows(err) {
 			return httpx.ErrNotFound
 		}
@@ -541,6 +624,11 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 	}
 	if !active {
 		return httpx.BadRequest("That account is deactivated.")
+	}
+	// Don't add a limited user to a channel outside their allowlist — that would
+	// make them a member of a channel they still cannot open.
+	if target := (db.User{AllowedChannels: allowedChannels}); !target.ChannelAllowed(basics.Name) {
+		return httpx.Conflict("That user is limited to a set of channels that does not include this one.")
 	}
 
 	tag, err := s.DB.Pool.Exec(ctx,
@@ -684,7 +772,7 @@ func (s *Server) handleTyping(w http.ResponseWriter, r *http.Request) error {
 	// Read access gates who may emit "typing": otherwise a non-member could
 	// inject a fake indicator into a private channel or DM. requireMembership
 	// still lets any signed-in user type in a public channel (auto-join on send).
-	if err := s.requireMembership(r.Context(), id, me.ID); err != nil {
+	if err := s.requireMembership(r.Context(), id, me); err != nil {
 		return err
 	}
 	s.publishToChannel(r.Context(), id, realtime.Event{Type: "typing", Data: map[string]any{

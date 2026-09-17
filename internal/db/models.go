@@ -2,6 +2,7 @@ package db
 
 import (
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -30,6 +31,53 @@ type User struct {
 	// account creation ("only see messages from now on"), never exposed on
 	// the wire.
 	HistoryCutoff *time.Time `json:"-"`
+
+	// AllowedChannels restricts a "limited" user to a set of channels. "*"
+	// (the default) means no restriction. Otherwise a comma-separated list of
+	// lowercased channel names. DMs are never restricted. Exposed only so the
+	// admin UI can edit it; cleared from user.update broadcasts to others.
+	AllowedChannels string `json:"allowed_channels,omitempty"`
+}
+
+// allowedChannelSet parses AllowedChannels. all==true means every channel is
+// permitted; otherwise names holds the lowercased allowlist.
+func (u *User) allowedChannelSet() (all bool, names map[string]struct{}) {
+	a := strings.TrimSpace(u.AllowedChannels)
+	if a == "" || a == "*" {
+		return true, nil
+	}
+	names = make(map[string]struct{})
+	for n := range strings.SplitSeq(a, ",") {
+		if n = strings.ToLower(strings.TrimSpace(n)); n != "" {
+			names[n] = struct{}{}
+		}
+	}
+	return false, names
+}
+
+// ChannelAllowed reports whether this user may access the named channel. DM
+// access is decided elsewhere; this governs named channels only.
+func (u *User) ChannelAllowed(name string) bool {
+	all, names := u.allowedChannelSet()
+	if all {
+		return true
+	}
+	_, ok := names[strings.ToLower(name)]
+	return ok
+}
+
+// AllowedChannelsSQL returns the allowlist in a shape queries can bind: allABC
+// true means "no filter", otherwise names is the lowercased list for = ANY().
+func (u *User) AllowedChannelsSQL() (all bool, names []string) {
+	ok, set := u.allowedChannelSet()
+	if ok {
+		return true, nil
+	}
+	names = make([]string, 0, len(set))
+	for n := range set {
+		names = append(names, n)
+	}
+	return false, names
 }
 
 // SetAvatarURL derives the client-facing avatar URL from AvatarSHA. Every scan

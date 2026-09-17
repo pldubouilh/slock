@@ -163,7 +163,7 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) erro
 		return err
 	}
 	ctx := r.Context()
-	if err := s.requireMembership(ctx, id, me.ID); err != nil {
+	if err := s.requireMembership(ctx, id, me); err != nil {
 		return err
 	}
 
@@ -269,6 +269,11 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) err
 	member, err := s.isMember(ctx, id, me.ID)
 	if err != nil {
 		return err
+	}
+	// A limited user may not post outside its allowlist — and posting to a
+	// public channel auto-joins, which would then stream it every new message.
+	if basics.Kind == db.KindChannel && !me.ChannelAllowed(basics.Name) {
+		return httpx.ErrForbidden
 	}
 	autoJoin := false
 	if !member {
@@ -483,7 +488,7 @@ func (s *Server) reactionTarget(r *http.Request) (messageID, channelID int64, em
 	if deletedAt != nil {
 		return 0, 0, "", httpx.BadRequest("That message was deleted.")
 	}
-	if err := s.requireMembership(ctx, channelID, me.ID); err != nil {
+	if err := s.requireMembership(ctx, channelID, me); err != nil {
 		return 0, 0, "", err
 	}
 	return messageID, channelID, emoji, nil
