@@ -51,10 +51,12 @@ strings, so the templates are where message/row structure lives.
     #new-dm-btn             button
     #me-chip                current user button (opens #me-menu)
       #me-avatar  #me-name
-    #me-menu                popup: #profile-btn #admin-btn #theme-btn
-                            #notifications-btn #logout-btn (message density,
-                            sidebar side and view zoom moved into the profile
-                            modal)
+    #me-menu                popup: #profile-btn #notifications-btn #sound-btn
+                            (new-message blip toggle, device-local
+                            localStorage["slock:sound"], .sound-label shows
+                            on/off) #theme-btn #admin-btn #logout-btn (message
+                            density, sidebar side and view zoom moved into the
+                            profile modal)
     #side-resize            desktop drag handle on the sidebar's inner edge;
                             resizes --sidebar-w (double-click resets), width
                             persists in localStorage["slock:sidebar-width"]

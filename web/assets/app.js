@@ -209,6 +209,7 @@ const LS = {
   pinnedChans: 'slock:pinned-channels',
   foldChans: 'slock:fold-channels',
   foldDMs: 'slock:fold-dms',
+  sound: 'slock:sound',
   font: 'slock:font',
   lastChannel: 'slock:last-channel',
   drafts: 'slock:drafts',
@@ -2642,6 +2643,9 @@ function onMessageNew(data) {
     if (ch.kind === 'dm' || mentionsMe(m.body)) mentionedChans.add(channelId);
     renderSidebar();
     updateBadges();
+    // A blip for a message that lands while you are not watching, unless the
+    // channel is muted — same "would this bump the badge" condition.
+    if (!isMuted(ch)) playMessageSound();
   } else if (!isOwn) {
     maybeMarkRead();
   }
@@ -4852,6 +4856,8 @@ function wireMenu() {
   on(byId('admin-btn'), 'click', () => { closeMeMenu(); openAdminModal(); });
   on(byId('theme-btn'), 'click', () => cycleTheme());
   on(byId('notifications-btn'), 'click', () => { toggleNotifications(); });
+  on(byId('sound-btn'), 'click', () => toggleSound());
+  reflectSoundBtn();
   on(byId('logout-btn'), 'click', async () => {
     closeMeMenu();
     try { await api('/api/auth/logout', { method: 'POST', toast: false }); } catch { /* ignore */ }
@@ -4948,6 +4954,61 @@ const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in win
 async function currentPushSubscription() {
   if (!pushSupported() || !swRegistration) return null;
   try { return await swRegistration.pushManager.getSubscription(); } catch { return null; }
+}
+
+/* -------- new-message sound (device-local, #sound-btn) --------
+   A short blip synthesised with the Web Audio API — no asset to ship, and it
+   works offline. The context is created/resumed from the toggle click (a user
+   gesture), which satisfies autoplay policies. */
+
+let soundEnabled = false;
+try { soundEnabled = localStorage.getItem(LS.sound) === '1'; } catch { /* private mode */ }
+let audioCtx = null;
+
+function ensureAudioCtx() {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    return audioCtx;
+  } catch {
+    return null;
+  }
+}
+
+function playMessageSound() {
+  if (!soundEnabled) return;
+  const ctx = ensureAudioCtx();
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(660, t);
+  osc.frequency.exponentialRampToValueAtTime(880, t + 0.07);
+  gain.gain.setValueAtTime(0.0001, t);
+  gain.gain.exponentialRampToValueAtTime(0.14, t + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t);
+  osc.stop(t + 0.25);
+}
+
+function reflectSoundBtn() {
+  const btn = byId('sound-btn');
+  if (!btn) return;
+  const label = btn.querySelector('.sound-label') || btn;
+  label.textContent = soundEnabled ? 'Sound: on' : 'Sound: off';
+  btn.setAttribute('aria-pressed', soundEnabled ? 'true' : 'false');
+}
+
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  try {
+    if (soundEnabled) localStorage.setItem(LS.sound, '1');
+    else localStorage.removeItem(LS.sound);
+  } catch { /* private mode */ }
+  reflectSoundBtn();
+  if (soundEnabled) { ensureAudioCtx(); playMessageSound(); } // unlock + preview
 }
 
 async function refreshNotifButton() {
