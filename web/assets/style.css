@@ -2205,6 +2205,8 @@ input[type="checkbox"] {
 .admin-table tr:last-child td { border-bottom: 0; }
 .arow-name { font-weight: 600; white-space: nowrap; }
 .arow-email { color: var(--text-3); }
+.arow-actions { white-space: nowrap; }
+.arow-actions .arow-save { margin-inline-start: 6px; }
 .arow-badges span {
   display: inline-block;
   margin-inline-end: 4px;

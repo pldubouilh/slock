@@ -4214,32 +4214,41 @@ async function openAdminModal() {
           const data = await api(`/api/admin/users/${uid}/reset-password`, { method: 'POST' });
           showAdminResult(m, `Temporary password for ${user.display_name}:`, data.temp_password);
         } catch { /* toasted */ }
+      } else if (e.target.closest('.arow-save')) {
+        const input = row.querySelector('.arow-allowed');
+        if (input) saveAllowed(uid, input);
       }
     });
 
-    // Channel allowlist edits commit on blur / Enter (change), not per keystroke.
-    tbody.addEventListener('change', async (e) => {
+    // The channel allowlist is committed explicitly (the Save button or Enter),
+    // so an edit is not lost or applied by a stray focus change.
+    tbody.addEventListener('keydown', (e) => {
       const input = e.target.closest('.arow-allowed');
-      if (!input) return;
-      const row = e.target.closest('[data-user-id]');
-      const uid = Number(row && row.dataset.userId);
-      const user = users.find((u) => u.id === uid);
-      if (!user) return;
-      const value = input.value.trim() || '*';
-      if (value === (user.allowed_channels || '*')) return;
-      try {
-        const data = await api(`/api/admin/users/${uid}`, {
-          method: 'PATCH', body: { allowed_channels: value },
-        });
-        Object.assign(user, data.user);
-        input.value = user.allowed_channels || '*'; // reflect server normalisation
-        const scope = input.value === '*' ? 'all channels' : input.value;
-        toast(`${user.display_name} can now access ${scope}`);
-      } catch {
-        input.value = user.allowed_channels || '*';
-      }
+      if (!input || e.key !== 'Enter') return;
+      e.preventDefault();
+      const rowEl = e.target.closest('[data-user-id]');
+      const uid = Number(rowEl && rowEl.dataset.userId);
+      if (uid) saveAllowed(uid, input);
     });
   }
+
+  const saveAllowed = async (uid, input) => {
+    const user = users.find((u) => u.id === uid);
+    if (!user) return;
+    const value = input.value.trim() || '*';
+    if (value === (user.allowed_channels || '*')) { toast('No channel changes to save'); return; }
+    try {
+      const data = await api(`/api/admin/users/${uid}`, {
+        method: 'PATCH', body: { allowed_channels: value },
+      });
+      Object.assign(user, data.user);
+      input.value = user.allowed_channels || '*'; // reflect server normalisation
+      const scope = input.value === '*' ? 'all channels' : input.value;
+      toast(`${user.display_name} can now access ${scope}`);
+    } catch {
+      input.value = user.allowed_channels || '*';
+    }
+  };
 
   /* -------- workspace identity (name + icon) */
   const wsForm = m.q('.ws-form');
@@ -4407,14 +4416,6 @@ async function openAdminModal() {
   const renderTokens = () => {
     if (!tokList) return;
     tokList.textContent = '';
-    if (!tokens.length) {
-      const probe = tpl('tpl-token-row');
-      const empty = document.createElement(probe ? probe.tagName : 'div');
-      empty.className = 'tok-empty';
-      empty.textContent = 'No API tokens yet — create one below.';
-      tokList.append(empty);
-      return;
-    }
     for (const t of tokens) {
       const row = tokenRow(t);
       if (row) tokList.append(row);
