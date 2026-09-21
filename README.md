@@ -3,13 +3,14 @@
 A small, fuss-free, fast, self-hosted team chat. 
 
 - Go backend, Postgres, plain HTML/CSS/JS client. 
-- Lightweight UI with no framework (<300KiB, loads in ms), with lightweight theming support.
-- 1 dependency (server postgres), everything else is standard library.
-- Scales well over 100+ concurrent users on tiny 1vcpu host.
+- Lightweight UI with no framework (300KiB, loads in ms).
+- 1 go dependency (postgres), everything else is standard library.
 - Phone app support with notifications (PWA).
-- Message support markdown & attachments.
-- Fuzzy search / channel switcher.
-- Support for bot integration.
+- Scales well over 100+ concurrent users on tiny 1vcpu host.
+- Markdown & attachments. Lightweight theming. Definitely no threads.
+- Fuzzy search & channel switcher.
+- Simply bot integration.
+- Various user roles: admin, standard, limited history, limited channels.
 - IRC inspired terminal client.
 
 <img width="1452" height="879" alt="Image" src="https://github.com/user-attachments/assets/903f4230-a4aa-4dba-9cbf-9ba00b647c50" />
@@ -44,7 +45,7 @@ You can now start slock:
 ; docker compose up -d
 ```
 
-slock binds to `127.0.0.1:8080`. Front it with [caddy](https://caddyserver.com/) (or your preferred webserver) to get https and reverse proxy. Example caddy config: 
+By default, slock binds to `127.0.0.1:8080`. Front it with [caddy](https://caddyserver.com/) (or your preferred webserver) to get https and reverse proxy. Example caddy config: 
 
 ```
 slock.example.com {

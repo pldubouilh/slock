@@ -1304,8 +1304,21 @@ function updateBadges() {
 
 /* ============================================================ composer */
 
-let clientSeq = 0;
 const typingSentAt = new Map(); // channelId -> ts
+
+// A per-send idempotency key the server dedupes on. A real UUID, so two of the
+// user's own devices can never mint the same key (a timestamp+counter could
+// collide across tabs at the same millisecond). Falls back to random bytes
+// where crypto.randomUUID is unavailable (very old / non-secure contexts).
+function sendId() {
+  try {
+    if (crypto.randomUUID) return crypto.randomUUID();
+  } catch { /* fall through */ }
+  const b = new Uint8Array(16);
+  try { crypto.getRandomValues(b); }
+  catch { for (let i = 0; i < b.length; i++) b[i] = Math.floor(Math.random() * 256); }
+  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
+}
 
 // Blur the composer if it holds focus, which closes the phone keyboard.
 function dismissKeyboard() {
@@ -1511,7 +1524,7 @@ async function submitComposer() {
 
   const channelId = state.currentId;
   const st = chanState(channelId);
-  const clientId = `c-${Date.now()}-${++clientSeq}`;
+  const clientId = sendId();
   const msg = {
     id: 0, channel_id: channelId, user_id: state.me.id, body,
     created_at: new Date().toISOString(), edited_at: null, deleted_at: null,
@@ -1546,6 +1559,10 @@ function postMessage_(channelId, msg) {
     const ch = state.channels.get(channelId);
     if (ch && !ch.is_member) { ch.is_member = true; renderSidebar(); renderChannelHeader(); }
   }).catch((err) => {
+    // The POST response can be lost on a flaky link even though the server got
+    // it and the message.new SSE frame already reconciled us (msg.id set). Only
+    // a truly unsent message is a failure.
+    if (msg.id) return;
     msg.failed = true;
     msg.pending = false;
     refreshMsgEl(channelId, msg);

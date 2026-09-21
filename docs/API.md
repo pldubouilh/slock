@@ -161,6 +161,11 @@ attachments and reactions in the same batch.
 - `before=<id>` returns messages older than that id (scroll-back);
   `after=<id>` returns newer ones (gap-fill after reconnect).
 - A message needs a non-empty `body` **or** at least one attachment.
+- `client_id` is an idempotency key: `(user_id, client_id)` is unique, so a
+  retried POST (a browser re-sending over a flaky connection, or a manual
+  retry) returns the original message — `200` with the existing one, no
+  duplicate insert or re-publish — rather than a second `201`. An empty/absent
+  `client_id` is never deduped.
 - Body max 8000 chars. Only the author may edit; author or admin may delete.
 - Soft-deleted messages come back with `deleted_at` set and `body: ""`.
 - `{emoji}` is URL-encoded; server caps it at 24 bytes.

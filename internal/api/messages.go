@@ -299,10 +299,29 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) err
 
 	var msg db.Message
 	msg.ChannelID, msg.UserID, msg.Body = id, me.ID, body
+	// Idempotent on client_id: a POST the browser transparently re-sent over a
+	// flaky connection (or a manual retry) resolves to the one message instead
+	// of a duplicate. DO UPDATE (a no-op self-set) makes RETURNING fire on
+	// conflict too; (xmax = 0) is true only for a fresh insert.
+	var inserted bool
 	if err := tx.QueryRow(ctx,
-		`INSERT INTO messages (channel_id, user_id, body) VALUES ($1, $2, $3)
-		 RETURNING id, created_at`, id, me.ID, body).Scan(&msg.ID, &msg.CreatedAt); err != nil {
+		`INSERT INTO messages (channel_id, user_id, body, client_id) VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (user_id, client_id) WHERE client_id <> '' DO UPDATE SET body = messages.body
+		 RETURNING id, created_at, (xmax = 0)`,
+		id, me.ID, body, in.ClientID).Scan(&msg.ID, &msg.CreatedAt, &inserted); err != nil {
 		return err
+	}
+	if !inserted {
+		// This client_id was already sent: the first request did the insert,
+		// attachments, publish and push. Hand back that message, unchanged.
+		_ = tx.Rollback(ctx)
+		existing, err := s.loadMessage(ctx, msg.ID, me.ID)
+		if err != nil {
+			return err
+		}
+		existing.ClientID = in.ClientID
+		httpx.JSON(w, http.StatusOK, map[string]any{"message": existing})
+		return nil
 	}
 
 	if len(in.AttachmentIDs) > 0 {
