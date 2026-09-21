@@ -112,7 +112,7 @@ because the URL is versioned by content hash.
 | GET | `/api/channels` | – | `200 {channels: [Channel], dms: [Channel]}` |
 | POST | `/api/channels` | `{name, topic?, is_private?}` | `201 {channel}` |
 | GET | `/api/channels/{id}` | – | `200 {channel}` (includes `members`) |
-| PATCH | `/api/channels/{id}` | `{name?, topic?}` | `200 {channel}` |
+| PATCH | `/api/channels/{id}` | `{name?, topic?, is_private?}` | `200 {channel}` |
 | POST | `/api/channels/{id}/join` | – | `200 {channel}` |
 | POST | `/api/channels/{id}/leave` | – | `204` |
 | POST | `/api/channels/{id}/members` | `{user_id}` | `204` |
@@ -125,6 +125,8 @@ because the URL is versioned by content hash.
 `unread_count` is capped at 100: counting exactly would mean scanning all
 history on every call, so the server stops there and clients render anything at
 the cap as "99+". The same cap applies to the push badge total.
+
+PATCH (and member removal) is admin, or creator while they can still read the channel — a creator removed from their private channel can't flip it public to get back in. `is_private` may be toggled after creation: making a channel private drops it for non-members, making it public exposes it to everyone (allowlist permitting). Since that flips per-viewer visibility in ways one broadcast frame can't express, a privacy change emits `channels.resync` to all clients (they refetch `/api/channels`) alongside a `channel.update` to members; name/topic-only edits just emit `channel.update`.
 
 `GET /api/channels` returns **all** public channels (so the browser/Ctrl-K can
 list ones you have not joined) plus private channels you belong to. `dms` holds

@@ -185,6 +185,20 @@ func canAdminChannel(b *channelBasics, u *db.User) bool {
 	return u.IsAdmin || (b.CreatedBy != nil && *b.CreatedBy == u.ID)
 }
 
+// requireChannelAdmin gates channel management: workspace admins, or the
+// creator while they can still read the channel. Without the read check a
+// creator who was removed from their private channel (or whose allowlist no
+// longer covers it) could flip it public and read it again.
+func (s *Server) requireChannelAdmin(ctx context.Context, b *channelBasics, u *db.User) error {
+	if !canAdminChannel(b, u) {
+		return httpx.ErrForbidden
+	}
+	if u.IsAdmin {
+		return nil
+	}
+	return s.requireMembership(ctx, b.ID, u)
+}
+
 // publishMembers sends channel.members to the channel plus the given extra
 // users (a user who just left is no longer a member but still needs the frame).
 func (s *Server) publishMembers(ctx context.Context, channelID int64, extra ...int64) {
@@ -457,8 +471,9 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 		return err
 	}
 	var in struct {
-		Name  *string `json:"name"`
-		Topic *string `json:"topic"`
+		Name      *string `json:"name"`
+		Topic     *string `json:"topic"`
+		IsPrivate *bool   `json:"is_private"`
 	}
 	if err := httpx.DecodeJSON(w, r, &in); err != nil {
 		return err
@@ -471,8 +486,8 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 	if basics.Kind == db.KindDM {
 		return httpx.ErrForbidden
 	}
-	if !canAdminChannel(basics, me) {
-		return httpx.ErrForbidden
+	if err := s.requireChannelAdmin(ctx, basics, me); err != nil {
+		return err
 	}
 
 	// One statement, placeholders numbered as the args accumulate.
@@ -494,6 +509,11 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 		args = append(args, topic)
 		set = append(set, "topic = $"+strconv.Itoa(len(args)))
 	}
+	privacyChanged := in.IsPrivate != nil && *in.IsPrivate != basics.IsPrivate
+	if in.IsPrivate != nil {
+		args = append(args, *in.IsPrivate)
+		set = append(set, "is_private = $"+strconv.Itoa(len(args)))
+	}
 	if len(set) > 0 {
 		args = append(args, id)
 		sql := `UPDATE channels SET ` + strings.Join(set, ", ") + ` WHERE id = $` + strconv.Itoa(len(args))
@@ -509,11 +529,23 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
-	ev := realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}
-	if ch.IsPrivate {
-		s.publishToChannel(ctx, id, ev, 0)
+	if privacyChanged {
+		// Privacy flips who may see the channel: made private, non-members must
+		// drop it; made public, everyone (allowlist permitting) may now see and
+		// join it. Per-viewer is_member and visibility are awkward to express in
+		// one broadcast frame, so — a rare admin action — every client just
+		// refetches its channel list, which reflects the new access exactly
+		// (and carries any name/topic change in the same update). Members still
+		// get the live channel.update for a snappy header/lock change.
+		s.publishToChannel(ctx, id, realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}, 0)
+		s.Hub.PublishAll(realtime.Event{Type: "channels.resync", Data: map[string]any{}})
 	} else {
-		s.Hub.PublishAll(ev)
+		ev := realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}
+		if ch.IsPrivate {
+			s.publishToChannel(ctx, id, ev, 0)
+		} else {
+			s.Hub.PublishAll(ev)
+		}
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"channel": ch})
 	return nil
@@ -665,8 +697,8 @@ func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) erro
 	if basics.Kind != db.KindChannel {
 		return httpx.ErrForbidden
 	}
-	if !canAdminChannel(basics, me) {
-		return httpx.ErrForbidden
+	if err := s.requireChannelAdmin(ctx, basics, me); err != nil {
+		return err
 	}
 	tag, err := s.DB.Pool.Exec(ctx,
 		`DELETE FROM channel_members WHERE channel_id = $1 AND user_id = $2`, id, target)

@@ -3220,11 +3220,11 @@ function openChannelInfoModal() {
   const privEl = form.querySelector('[name=is_private]');
   if (nameEl) nameEl.value = ch.name;
   if (topicEl) topicEl.value = ch.topic || '';
+  const canEdit = state.me && (state.me.is_admin || ch.created_by === state.me.id);
   if (privEl) {
     privEl.checked = !!ch.is_private;
-    privEl.disabled = true; // privacy cannot change after creation
+    privEl.disabled = !canEdit; // an admin/creator can flip it after creation
   }
-  const canEdit = state.me && (state.me.is_admin || ch.created_by === state.me.id);
   const submit = form.querySelector('.mform-submit');
   if (submit) {
     submit.textContent = 'Save changes';
@@ -3261,18 +3261,20 @@ function openChannelInfoModal() {
     if (!canEdit) { m.close(); return; }
     formError(m, '');
     try {
-      const data = await api(`/api/channels/${ch.id}`, {
-        method: 'PATCH',
-        toast: false,
-        body: {
-          name: nameEl ? nameEl.value.trim() : ch.name,
-          topic: topicEl ? topicEl.value.trim() : ch.topic,
-        },
-      });
+      const body = {
+        name: nameEl ? nameEl.value.trim() : ch.name,
+        topic: topicEl ? topicEl.value.trim() : ch.topic,
+      };
+      if (privEl && privEl.checked !== !!ch.is_private) body.is_private = privEl.checked;
+      const data = await api(`/api/channels/${ch.id}`, { method: 'PATCH', toast: false, body });
+      const becamePrivate = body.is_private === true;
       mergeChannel(data.channel);
       renderSidebar();
       renderChannelHeader();
       m.close();
+      if (body.is_private !== undefined) {
+        toast(becamePrivate ? `#${data.channel.name} is now private` : `#${data.channel.name} is now public`);
+      }
     } catch (err) {
       formError(m, err.message);
     }
