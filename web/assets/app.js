@@ -945,10 +945,17 @@ function newestRealId(st) {
 async function loadHistory(channelId) {
   const st = chanState(channelId);
   const data = await api(`/api/channels/${channelId}/messages?limit=${HISTORY_PAGE}`);
+  // Messages typed while offline have no server id yet — carry them over so a
+  // (re)load never drops something the user is still trying to send. They belong
+  // at the tail: they're the most recent thing in the channel.
+  const outbox = st.msgs.filter((m) => !m.id && m.client_id);
   st.msgs = [];
   st.byId = new Map();
   st.byClient = new Map();
   for (const m of data.messages) addMessageToState(channelId, m);
+  for (const m of outbox) {
+    if (!st.byClient.has(m.client_id)) addMessageToState(channelId, m);
+  }
   st.loaded = true;
   st.stale = false;
   st.hasMore = !!data.has_more;
@@ -1114,6 +1121,16 @@ async function openChannel(channelId, opts = {}) {
     try {
       await loadHistory(channelId);
     } catch {
+      // Offline with nothing cached for this channel. Don't leave the previous
+      // channel's messages under the new title — that reads as if they belong
+      // here. Show the channel empty (any unsent messages we're holding still
+      // render); the offline banner already explains why there's no history.
+      // st.loaded stays false, so a reconnect refetches for real.
+      if (state.currentId === channelId) {
+        renderMessagesFull(channelId);
+        restoreDraft(channelId);
+        updateJumpLatest();
+      }
       return;
     } finally {
       if (loader) loader.hidden = true;
@@ -1603,6 +1620,17 @@ function retrySend(channelId, clientId) {
   m.pending = true;
   refreshMsgEl(channelId, m);
   postMessage_(channelId, m);
+}
+
+// Re-send everything that failed to send while offline, across every channel,
+// oldest first. Called on reconnect. retrySend skips any that the SSE echo has
+// meanwhile reconciled (they have an id now), so this is safe to call anytime.
+function flushOutbox() {
+  for (const [channelId, st] of state.chan) {
+    for (const m of st.msgs.slice()) {
+      if (m.failed && !m.id && m.client_id) retrySend(channelId, m.client_id);
+    }
+  }
 }
 
 // Reconcile the optimistic copy with the server message (from the POST echo
@@ -2498,7 +2526,14 @@ function connectSSE() {
         if (st.loaded && id !== state.currentId) st.stale = true;
       }
       refetchChannels();
-      if (state.currentId) gapFill(state.currentId);
+      flushOutbox(); // re-send anything that failed to send while offline
+      if (state.currentId) {
+        const st = chanState(state.currentId);
+        // A channel opened while offline may have never loaded (empty view).
+        // Fill it for real now; otherwise just close the gap.
+        if (st.loaded) gapFill(state.currentId);
+        else openChannel(state.currentId, { fromHistory: true, noFocus: true });
+      }
     }
   });
 
