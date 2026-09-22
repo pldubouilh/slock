@@ -439,6 +439,7 @@ function userName(id) {
 }
 
 function isCompactWith(prev, m, st) {
+  if (m.kind === 'system' || (prev && prev.kind === 'system')) return false;
   if (!prev || prev.user_id !== m.user_id) return false;
   if (prev.deleted_at || m.deleted_at) return false;
   if (dayKey(prev.created_at) !== dayKey(m.created_at)) return false;
@@ -456,7 +457,31 @@ function makeDayDivider(ts) {
   return el;
 }
 
+// Channel-lifecycle notes (created, renamed, made public/private, joined) —
+// an ambient centred line, not a chat bubble: no avatar, no actions, and the
+// full date/time printed inline.
+function makeSystemEl(m) {
+  const li = document.createElement('li');
+  li.className = 'msg msg--system';
+  li.dataset.id = m.id || '';
+  const line = document.createElement('span');
+  line.className = 'sys-line';
+  const who = document.createElement('span');
+  who.className = 'sys-who';
+  who.textContent = userName(m.user_id);
+  line.append(who, document.createTextNode(' ' + (m.body || '')));
+  const time = document.createElement('time');
+  time.className = 'sys-time';
+  const d = new Date(m.created_at);
+  time.dateTime = d.toISOString();
+  time.textContent = d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  line.append(document.createTextNode(' · '), time);
+  li.append(line);
+  return li;
+}
+
 function makeMsgEl(m, prev, st) {
+  if (m.kind === 'system') return makeSystemEl(m);
   const el = tpl('tpl-message');
   if (!el) return document.createDocumentFragment();
   const me = state.me;
@@ -2652,6 +2677,12 @@ function onMessageNew(data) {
   const isOwn = state.me && m.user_id === state.me.id;
   const visibleHere = channelId === state.currentId && state.atBottom
     && !document.hidden && document.hasFocus();
+  // System notes are ambient: they render in the channel but never bump unread,
+  // sound, or the read marker's "someone said something" semantics.
+  if (m.kind === 'system') {
+    if (visibleHere) maybeMarkRead();
+    return;
+  }
   if (!isOwn && !visibleHere) {
     ch.unread_count = (ch.unread_count || 0) + 1;
     // A DM is direct, and an @-mention is aimed at you: either must surface the
@@ -5163,7 +5194,8 @@ function wireMessageList() {
     const row = e.target.closest('.msg');
     const held = list.querySelector('.msg--held');
     if (held && held !== row) clearHeldMsg(); // tapping elsewhere lets go
-    if (!row || e.target.closest('.att-img') || e.target.closest('.msg-actions')) return;
+    if (!row || row.classList.contains('msg--system')
+      || e.target.closest('.att-img') || e.target.closest('.msg-actions')) return;
     // A finger landing on a coasting list is there to stop the scroll — it
     // must never read as the start of a long-press.
     if (performance.now() - lastScrollAt < 200) return;

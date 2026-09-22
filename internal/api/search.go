@@ -148,6 +148,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 
 	var where []string
 	where = append(where, "m.deleted_at IS NULL")
+	where = append(where, "m.kind = 'user'") // system notes are not search hits
 	where = append(where, `(c.kind = 'channel' AND NOT c.is_private
 	                        OR EXISTS (SELECT 1 FROM channel_members cm
 	                                    WHERE cm.channel_id = m.channel_id AND cm.user_id = $1))`)
@@ -205,9 +206,10 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 			raw string
 		)
 		if err := rows.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Body, &m.CreatedAt, &m.EditedAt,
-			&m.DeletedAt, &res.ChannelName, &res.ChannelKind, &res.UserName, &raw); err != nil {
+			&m.DeletedAt, &m.Kind, &res.ChannelName, &res.ChannelKind, &res.UserName, &raw); err != nil {
 			return err
 		}
+		m.Kind = "" // results are all kind='user' (filtered); keep it off the wire
 		m.Attachments = []db.Attachment{}
 		m.Reactions = []db.Reaction{}
 		res.ChannelID = m.ChannelID

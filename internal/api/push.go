@@ -396,6 +396,7 @@ func (s *Server) unreadTotal(ctx context.Context, userID int64) int {
 		            AND m.id > cm.last_read_message_id
 		            AND m.user_id <> cm.user_id
 		            AND m.deleted_at IS NULL
+		            AND m.kind = 'user'
 		            -- limited-history users: pre-account messages are not unread
 		            AND m.created_at >= COALESCE((SELECT history_cutoff FROM users WHERE id = $1), '-infinity'::timestamptz)
 		          ORDER BY m.id DESC

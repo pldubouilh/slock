@@ -34,7 +34,13 @@ something here, change it here first.
 { "id": 901, "channel_id": 12, "user_id": 3, "body": "hi",
   "created_at": "...", "edited_at": null, "deleted_at": null,
   "attachments": [Attachment], "reactions": [Reaction],
-  "client_id": "c-17" }    // echoed from the send request, for optimistic UI
+  "client_id": "c-17",     // echoed from the send request, for optimistic UI
+  "kind": "system" }       // omitted for normal messages; "system" = a channel
+                           // -lifecycle note (created / renamed / made public
+                           // or private / someone joined). user_id is who did
+                           // it, body the predicate ("joined the channel").
+                           // Ambient: never counts as unread, never web-pushed,
+                           // excluded from search. Rendered as a centred line.
 
 // Attachment
 { "id": 55, "message_id": 901, "uploader_id": 3, "filename": "shot.png",

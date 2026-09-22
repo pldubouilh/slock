@@ -131,6 +131,7 @@ SELECT `+channelCols+`,
                     SELECT 1 FROM messages m
                      WHERE m.channel_id = c.id AND m.deleted_at IS NULL
                        AND m.user_id <> $2 AND m.id > cm.last_read_message_id
+                       AND m.kind = 'user' -- system notes never count as unread
                        -- limited-history users: pre-account messages are not unread
                        AND m.created_at >= COALESCE((SELECT history_cutoff FROM users WHERE id = $2), '-infinity'::timestamptz)
                      ORDER BY m.id DESC
@@ -256,6 +257,7 @@ WITH my AS (
                    AND m.id > my.last_read_message_id
                    AND m.user_id <> $1
                    AND m.deleted_at IS NULL
+                   AND m.kind = 'user'
                    -- limited-history users: pre-account messages are not unread
                    AND m.created_at >= COALESCE((SELECT history_cutoff FROM users WHERE id = $1), '-infinity'::timestamptz)
                  -- ORDER BY is what makes the planner reach for
@@ -432,6 +434,7 @@ func (s *Server) handleCreateChannel(w http.ResponseWriter, r *http.Request) err
 		s.publishToChannel(ctx, id, realtime.Event{Type: "channel.new", Data: map[string]any{"channel": ch}}, 0)
 	}
 
+	s.postSystemMessage(ctx, id, me.ID, me.DisplayName, "created this channel")
 	httpx.JSON(w, http.StatusCreated, map[string]any{"channel": ch})
 	return nil
 }
@@ -547,6 +550,18 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 			s.Hub.PublishAll(ev)
 		}
 	}
+
+	// Activity notes, after the update is live.
+	if in.Name != nil && ch.Name != basics.Name {
+		s.postSystemMessage(ctx, id, me.ID, me.DisplayName, "renamed the channel to #"+ch.Name)
+	}
+	if privacyChanged {
+		if ch.IsPrivate {
+			s.postSystemMessage(ctx, id, me.ID, me.DisplayName, "made this channel private")
+		} else {
+			s.postSystemMessage(ctx, id, me.ID, me.DisplayName, "made this channel public")
+		}
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"channel": ch})
 	return nil
 }
@@ -576,6 +591,7 @@ func (s *Server) handleJoinChannel(w http.ResponseWriter, r *http.Request) error
 	}
 	if tag.RowsAffected() > 0 {
 		s.publishMembers(ctx, id)
+		s.postSystemMessage(ctx, id, me.ID, me.DisplayName, "joined the channel")
 	}
 	ch, err := s.loadChannel(ctx, id, me.ID)
 	if err != nil {
@@ -647,8 +663,8 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 		}
 	}
 	var active bool
-	var allowedChannels string
-	if err := s.DB.Pool.QueryRow(ctx, `SELECT is_active, allowed_channels FROM users WHERE id = $1`, in.UserID).Scan(&active, &allowedChannels); err != nil {
+	var allowedChannels, addedName string
+	if err := s.DB.Pool.QueryRow(ctx, `SELECT is_active, allowed_channels, display_name FROM users WHERE id = $1`, in.UserID).Scan(&active, &allowedChannels, &addedName); err != nil {
 		if isNoRows(err) {
 			return httpx.ErrNotFound
 		}
@@ -673,6 +689,8 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 			s.Hub.PublishUser(in.UserID, realtime.Event{Type: "channel.new", Data: map[string]any{"channel": ch}})
 		}
 		s.publishMembers(ctx, id)
+		// Attribute the note to the joiner, like a self-join.
+		s.postSystemMessage(ctx, id, in.UserID, addedName, "joined the channel")
 	}
 	httpx.NoContent(w)
 	return nil

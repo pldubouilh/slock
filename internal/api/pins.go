@@ -132,8 +132,11 @@ func (s *Server) handleListPins(w http.ResponseWriter, r *http.Request) error {
 		p.Attachments = []db.Attachment{}
 		p.Reactions = []db.Reaction{}
 		if err := rows.Scan(&p.ID, &p.ChannelID, &p.UserID, &p.Body, &p.CreatedAt,
-			&p.EditedAt, &p.DeletedAt, &p.PinnedBy, &p.PinnedAt); err != nil {
+			&p.EditedAt, &p.DeletedAt, &p.Kind, &p.PinnedBy, &p.PinnedAt); err != nil {
 			return err
+		}
+		if p.Kind == "user" {
+			p.Kind = "" // implicit on the wire, like scanMessage
 		}
 		out = append(out, p)
 		msgs = append(msgs, p.Message)

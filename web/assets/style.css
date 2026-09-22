@@ -808,6 +808,22 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   padding: 5px var(--sp-4);
   transition: background var(--t-fast) var(--ease);
 }
+
+/* channel-lifecycle notes: a quiet centred line, not a chat bubble */
+.msg--system {
+  display: block;
+  text-align: center;
+  padding: 7px var(--sp-4);
+  color: var(--text-3);
+  font-size: var(--fs-s);
+  background: none;
+}
+.msg--system .sys-line {
+  display: inline-block;
+  max-width: 90%;
+}
+.msg--system .sys-who { font-weight: 600; color: var(--text-2); }
+.msg--system .sys-time { color: var(--text-3); white-space: nowrap; }
 /* Desktop hover reveals a row's action toolbar (see .msg:hover .msg-actions
    below) but deliberately no background tint — the full-row highlight read as
    too heavy. Touch has no hover; there the long-press .msg--held state is the

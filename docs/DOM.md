@@ -169,6 +169,10 @@ write `textContent` on the avatar element itself — that would delete the image
     copy a message on a phone
   - clicking `.msg-author` or `.msg-avatar` opens the author's DM (pointer
     cursor only — deliberately no link styling)
+  - a message with `kind: "system"` renders instead as `.msg--system` (built
+    by `makeSystemEl`, not the template): a centred `.sys-line` of `.sys-who`
+    + predicate + `.sys-time` (full date/time). Ambient — no avatar, no
+    actions, no hover/long-press, never counted as unread
 - `#tpl-day-divider` → `.day-divider` with `.day-divider-label`
 - `#tpl-channel-item` → `.chan` (dataset.id; classes `.chan--active`,
   `.chan--unread`, `.chan--muted`, `.chan--member`, `.chan--private` — CSS

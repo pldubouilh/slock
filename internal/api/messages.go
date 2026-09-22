@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -19,14 +20,45 @@ const (
 )
 
 // messageCols is the column list every message query shares.
-const messageCols = `m.id, m.channel_id, m.user_id, m.body, m.created_at, m.edited_at, m.deleted_at`
+const messageCols = `m.id, m.channel_id, m.user_id, m.body, m.created_at, m.edited_at, m.deleted_at, m.kind`
 
 func scanMessage(row interface{ Scan(...any) error }) (db.Message, error) {
 	var m db.Message
-	err := row.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Body, &m.CreatedAt, &m.EditedAt, &m.DeletedAt)
+	err := row.Scan(&m.ID, &m.ChannelID, &m.UserID, &m.Body, &m.CreatedAt, &m.EditedAt, &m.DeletedAt, &m.Kind)
 	m.Attachments = []db.Attachment{}
 	m.Reactions = []db.Reaction{}
+	if m.Kind == "user" {
+		m.Kind = "" // the default is implicit on the wire (omitempty)
+	}
 	return m, err
+}
+
+// postSystemMessage records a channel-lifecycle note (kind='system') and
+// publishes it like any message so it appears live and in history. actorID is
+// who did it, actorName how to label them; text is the predicate ("joined the
+// channel"), which the client renders after the actor's name. No web push —
+// these are ambient, and they are excluded from unread counts.
+func (s *Server) postSystemMessage(ctx context.Context, channelID, actorID int64, actorName, text string) {
+	basics, err := s.channelBasics(ctx, channelID)
+	if err != nil {
+		log.Printf("api: system message channel %d: %v", channelID, err)
+		return
+	}
+	var msg db.Message
+	if err := s.DB.Pool.QueryRow(ctx,
+		`INSERT INTO messages (channel_id, user_id, body, kind) VALUES ($1, $2, $3, 'system')
+		 RETURNING id, created_at`, channelID, actorID, text).Scan(&msg.ID, &msg.CreatedAt); err != nil {
+		log.Printf("api: system message channel %d: %v", channelID, err)
+		return
+	}
+	msg.ChannelID, msg.UserID, msg.Body, msg.Kind = channelID, actorID, text, "system"
+	msg.Attachments = []db.Attachment{}
+	msg.Reactions = []db.Reaction{}
+	s.publishToChannel(ctx, channelID, realtime.Event{Type: "message.new", Data: map[string]any{
+		"message": msg,
+		"channel": map[string]any{"id": basics.ID, "kind": basics.Kind, "name": basics.Name},
+		"user":    map[string]any{"id": actorID, "display_name": actorName},
+	}}, 0)
 }
 
 // hydrate fills attachments and aggregated reactions for a batch of messages in

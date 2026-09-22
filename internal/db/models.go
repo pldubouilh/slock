@@ -133,6 +133,9 @@ type Message struct {
 	// state, so an unpin has to arrive as an explicit false.
 	Pinned   bool   `json:"pinned"`
 	ClientID string `json:"client_id,omitempty"` // echoed back for optimistic sends
+	// Kind is "system" for channel-lifecycle notes; empty (omitted) for normal
+	// user/bot messages, which the client treats as the default.
+	Kind string `json:"kind,omitempty"`
 }
 
 type Attachment struct {
