@@ -15,8 +15,8 @@
   color-scheme: dark;
 
   /* surfaces, low → high elevation */
-  --bg-0: #0e1116;            /* app canvas, message column */
-  --bg-1: #141920;            /* sidebar, cards, composer */
+  --bg-0: #151a24;            /* app canvas, message column */
+  --bg-1: #11151d;            /* sidebar, cards, composer */
   --bg-2: #1d242e;            /* hover, chips, code */
   --bg-3: #232c38;            /* popovers, modals, palette */
 

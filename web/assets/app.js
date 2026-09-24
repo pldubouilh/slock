@@ -4640,7 +4640,7 @@ const COLOR_COMBOS = [
   { name: 'Ocean',      sidebar: '#12395b', chat: '#f2f7fa' },
   { name: 'Forest',     sidebar: '#1f3d2b', chat: '#f4f8f2' },
   { name: 'Terracotta', sidebar: '#69352a', chat: '#faf6f1' },
-  { name: 'Midnight',   sidebar: '#151a24', chat: '#0e1116' },
+  { name: 'Midnight',   sidebar: '#11151d', chat: '#151a24' },
   { name: 'Mocha',      sidebar: '#332822', chat: '#171210' },
 ];
 
@@ -4648,7 +4648,7 @@ const COLOR_COMBOS = [
 // dark-on-dark reads better than an aubergine sidebar on a dark canvas.
 const DEFAULT_COLORS = {
   light: { sidebar: '#3f0e40', chat: '#f4f3f6' },
-  dark: { sidebar: '#151a24', chat: '#0e1116' },
+  dark: { sidebar: '#11151d', chat: '#151a24' },
 };
 
 const isHexColor = (s) => typeof s === 'string' && /^#[0-9a-f]{6}$/i.test(s);
