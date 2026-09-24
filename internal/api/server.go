@@ -308,5 +308,39 @@ func (s *Server) publishToChannel(ctx context.Context, channelID int64, ev realt
 	s.Hub.PublishUsers(ids, ev)
 }
 
+// publishToChannelSince is publishToChannel for an event that carries the
+// content of a message created at `at`: members whose limited history starts
+// after it (users.history_cutoff) are skipped, as they could never read it.
+func (s *Server) publishToChannelSince(ctx context.Context, channelID int64, at time.Time, ev realtime.Event) {
+	rows, err := s.DB.Pool.Query(ctx,
+		`SELECT cm.user_id FROM channel_members cm
+		   JOIN users u ON u.id = cm.user_id
+		  WHERE cm.channel_id = $1 AND (u.history_cutoff IS NULL OR u.history_cutoff <= $2)`,
+		channelID, at)
+	if err != nil {
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if rows.Err() != nil {
+		return
+	}
+	s.Hub.PublishUsers(ids, ev)
+}
+
+// beforeCutoff reports whether a message created at `at` predates the user's
+// limited history — such a message is invisible to them on every path.
+func beforeCutoff(u *db.User, at time.Time) bool {
+	return u.HistoryCutoff != nil && at.Before(*u.HistoryCutoff)
+}
+
 // isNoRows reports whether err is pgx's "no rows" sentinel.
 func isNoRows(err error) bool { return errors.Is(err, pgx.ErrNoRows) }

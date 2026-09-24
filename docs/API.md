@@ -367,10 +367,7 @@ welcome mail is also attempted, best-effort. New users are auto-joined to
 `#general` (unless their allowlist excludes it). Admins cannot deactivate or
 demote themselves.
 
-`limit_history: true` stamps `users.history_cutoff` with the account's
-creation time: that user never sees messages created before it — history
-pages, search, pins, attachment lists and unread counts all exclude them,
-server-side. The flag is set at creation only and never exposed on the wire;
+`limit_history: true` stamps `users.history_cutoff` with the account's creation time: that user never sees messages created before it — history pages (every `before`/`after` combination), search, pins, attachment lists, file downloads by id, reacting/pinning by message id, `message.update` realtime frames for edits of old messages, and unread counts all exclude them, server-side. The flag is set at creation only and never exposed on the wire;
 clearing it later is a manual `UPDATE users SET history_cutoff = NULL`.
 
 `allowed_channels` restricts a "limited" user to a set of channels: `*` (the

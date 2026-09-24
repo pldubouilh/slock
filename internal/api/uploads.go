@@ -213,16 +213,17 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) error {
 	var (
 		a         db.Attachment
 		channelID *int64
+		createdAt *time.Time
 		deletedAt *time.Time
 	)
 	err = s.DB.Pool.QueryRow(r.Context(),
 		`SELECT a.id, a.message_id, a.uploader_id, a.filename, a.mime, a.size_bytes, a.sha256,
-		        a.is_image, a.width, a.height, a.has_display, a.has_thumb, m.channel_id, m.deleted_at
+		        a.is_image, a.width, a.height, a.has_display, a.has_thumb, m.channel_id, m.created_at, m.deleted_at
 		   FROM attachments a
 		   LEFT JOIN messages m ON m.id = a.message_id
 		  WHERE a.id = $1`, id).
 		Scan(&a.ID, &a.MessageID, &a.UploaderID, &a.Filename, &a.Mime, &a.SizeBytes, &a.SHA256,
-			&a.IsImage, &a.Width, &a.Height, &a.HasDisplay, &a.HasThumb, &channelID, &deletedAt)
+			&a.IsImage, &a.Width, &a.Height, &a.HasDisplay, &a.HasThumb, &channelID, &createdAt, &deletedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return httpx.ErrNotFound
@@ -239,6 +240,11 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) error {
 		// A deleted message's body is scrubbed and its attachments must go with
 		// it — otherwise the file survives the delete for anyone with the id.
 		if deletedAt != nil {
+			return httpx.ErrNotFound
+		}
+		// Attachment ids are sequential: without this a limited-history user
+		// could walk them back into files from before their cutoff.
+		if createdAt != nil && beforeCutoff(me, *createdAt) {
 			return httpx.ErrNotFound
 		}
 		if err := s.requireMembership(r.Context(), *channelID, me); err != nil {

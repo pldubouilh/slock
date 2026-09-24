@@ -425,13 +425,14 @@ func (s *Server) handleUpdateMessage(w http.ResponseWriter, r *http.Request) err
 	var (
 		authorID  int64
 		channelID int64
+		createdAt time.Time
 		deletedAt *time.Time
 		hasAttach bool
 	)
 	err = s.DB.Pool.QueryRow(ctx,
-		`SELECT m.user_id, m.channel_id, m.deleted_at,
+		`SELECT m.user_id, m.channel_id, m.created_at, m.deleted_at,
 		        EXISTS(SELECT 1 FROM attachments a WHERE a.message_id = m.id)
-		   FROM messages m WHERE m.id = $1`, id).Scan(&authorID, &channelID, &deletedAt, &hasAttach)
+		   FROM messages m WHERE m.id = $1`, id).Scan(&authorID, &channelID, &createdAt, &deletedAt, &hasAttach)
 	if err != nil {
 		if isNoRows(err) {
 			return httpx.ErrNotFound
@@ -456,9 +457,11 @@ func (s *Server) handleUpdateMessage(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
-	s.publishToChannel(ctx, channelID, realtime.Event{
+	// The frame carries the full body, so a limited-history member must not get
+	// the edit of a message from before their cutoff.
+	s.publishToChannelSince(ctx, channelID, createdAt, realtime.Event{
 		Type: "message.update", Data: map[string]any{"message": msg},
-	}, 0)
+	})
 	httpx.JSON(w, http.StatusOK, map[string]any{"message": msg})
 	return nil
 }
@@ -528,13 +531,18 @@ func (s *Server) reactionTarget(r *http.Request) (messageID, channelID int64, em
 
 	ctx := r.Context()
 	var deletedAt *time.Time
+	var createdAt time.Time
 	err = s.DB.Pool.QueryRow(ctx,
-		`SELECT channel_id, deleted_at FROM messages WHERE id = $1`, messageID).Scan(&channelID, &deletedAt)
+		`SELECT channel_id, created_at, deleted_at FROM messages WHERE id = $1`, messageID).
+		Scan(&channelID, &createdAt, &deletedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return 0, 0, "", httpx.ErrNotFound
 		}
 		return 0, 0, "", err
+	}
+	if beforeCutoff(me, createdAt) {
+		return 0, 0, "", httpx.ErrNotFound
 	}
 	if deletedAt != nil {
 		return 0, 0, "", httpx.BadRequest("That message was deleted.")

@@ -28,13 +28,18 @@ func (s *Server) pinTarget(r *http.Request) (messageID, channelID int64, err err
 
 	ctx := r.Context()
 	var deletedAt *time.Time
+	var createdAt time.Time
 	err = s.DB.Pool.QueryRow(ctx,
-		`SELECT channel_id, deleted_at FROM messages WHERE id = $1`, messageID).Scan(&channelID, &deletedAt)
+		`SELECT channel_id, created_at, deleted_at FROM messages WHERE id = $1`, messageID).
+		Scan(&channelID, &createdAt, &deletedAt)
 	if err != nil {
 		if isNoRows(err) {
 			return 0, 0, httpx.ErrNotFound
 		}
 		return 0, 0, err
+	}
+	if beforeCutoff(me, createdAt) {
+		return 0, 0, httpx.ErrNotFound
 	}
 	if deletedAt != nil {
 		return 0, 0, httpx.BadRequest("That message was deleted.")
