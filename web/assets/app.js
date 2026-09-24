@@ -2585,7 +2585,10 @@ function connectSSE() {
   es.addEventListener('channels.resync', () => { refetchChannels(); });
 
   es.addEventListener('channel.update', (e) => {
-    mergeChannel(JSON.parse(e.data).channel);
+    const ch = JSON.parse(e.data).channel;
+    // An update never introduces a channel (channel.new / resync do that).
+    if (!state.channels.has(ch.id)) return;
+    mergeChannel(ch);
     renderSidebar();
     renderChannelHeader();
     updateBadges();

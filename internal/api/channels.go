@@ -200,6 +200,34 @@ func (s *Server) requireChannelAdmin(ctx context.Context, b *channelBasics, u *d
 	return s.requireMembership(ctx, b.ID, u)
 }
 
+// pruneDisallowedMembers drops limited users whose allowlist does not cover
+// the channel's (new) name — the allowlist is by name, so a rename can move a
+// channel out from under them — and nudges their clients to refetch.
+func (s *Server) pruneDisallowedMembers(ctx context.Context, channelID int64, name string) {
+	rows, err := s.DB.Pool.Query(ctx,
+		`DELETE FROM channel_members cm USING users u
+		  WHERE cm.channel_id = $1 AND cm.user_id = u.id
+		    AND u.allowed_channels <> '*'
+		    AND NOT (lower($2) = ANY(string_to_array(u.allowed_channels, ',')))
+		 RETURNING cm.user_id`, channelID, name)
+	if err != nil {
+		log.Printf("api: prune members of channel %d: %v", channelID, err)
+		return
+	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	rows.Close()
+	if len(ids) > 0 {
+		s.publishMembers(ctx, channelID, ids...)
+		s.Hub.PublishUsers(ids, realtime.Event{Type: "channels.resync", Data: map[string]any{}})
+	}
+}
+
 // publishMembers sends channel.members to the channel plus the given extra
 // users (a user who just left is no longer a member but still needs the frame).
 func (s *Server) publishMembers(ctx context.Context, channelID int64, extra ...int64) {
@@ -496,11 +524,13 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 	// One statement, placeholders numbered as the args accumulate.
 	var set []string
 	var args []any
+	newName := basics.Name
 	if in.Name != nil {
 		name, err := normalizeChannelName(*in.Name)
 		if err != nil {
 			return err
 		}
+		newName = name
 		args = append(args, name)
 		set = append(set, "name = $"+strconv.Itoa(len(args)))
 	}
@@ -528,31 +558,40 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 		}
 	}
 
+	renamed := newName != basics.Name
+	if renamed {
+		// Limited users allowed the old name but not the new one lose it now.
+		s.pruneDisallowedMembers(ctx, id, newName)
+	}
+
 	ch, err := s.loadChannel(ctx, id, me.ID)
 	if err != nil {
 		return err
 	}
-	if privacyChanged {
-		// Privacy flips who may see the channel: made private, non-members must
-		// drop it; made public, everyone (allowlist permitting) may now see and
-		// join it. Per-viewer is_member and visibility are awkward to express in
-		// one broadcast frame, so — a rare admin action — every client just
-		// refetches its channel list, which reflects the new access exactly
-		// (and carries any name/topic change in the same update). Members still
-		// get the live channel.update for a snappy header/lock change.
+	if privacyChanged || renamed {
+		// Both change who may see the channel: privacy flips visibility, and a
+		// rename moves it in or out of name-based allowlists. Per-viewer access
+		// is awkward to express in one broadcast frame, so — a rare action —
+		// every client refetches its channel list, which reflects the new access
+		// exactly. Members still get the live channel.update for a snappy header.
 		s.publishToChannel(ctx, id, realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}, 0)
 		s.Hub.PublishAll(realtime.Event{Type: "channels.resync", Data: map[string]any{}})
+	} else if ch.IsPrivate {
+		s.publishToChannel(ctx, id, realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}, 0)
 	} else {
-		ev := realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}
-		if ch.IsPrivate {
-			s.publishToChannel(ctx, id, ev, 0)
-		} else {
-			s.Hub.PublishAll(ev)
-		}
+		// A topic edit on a public channel: only users whose allowlist covers it
+		// hear about it, and only the shared fields go out — ch carries the
+		// editor's own is_member/unread/muted, which must not overwrite anyone
+		// else's.
+		s.announcePublicChannel(ctx, ch.Name, realtime.Event{Type: "channel.update", Data: map[string]any{
+			"channel": map[string]any{
+				"id": ch.ID, "kind": ch.Kind, "name": ch.Name, "topic": ch.Topic, "is_private": ch.IsPrivate,
+			},
+		}})
 	}
 
 	// Activity notes, after the update is live.
-	if in.Name != nil && ch.Name != basics.Name {
+	if renamed {
 		s.postSystemMessage(ctx, id, me.ID, me.DisplayName, "renamed the channel to #"+ch.Name)
 	}
 	if privacyChanged {
