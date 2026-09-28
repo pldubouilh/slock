@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	maxBodyRunes  = 8000
+	maxBodyRunes  = 40000
 	maxEmojiBytes = 24
 	maxClientID   = 64
 )

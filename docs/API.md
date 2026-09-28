@@ -174,7 +174,7 @@ attachments and reactions in the same batch.
   retry) returns the original message — `200` with the existing one, no
   duplicate insert or re-publish — rather than a second `201`. An empty/absent
   `client_id` is never deduped.
-- Body max 8000 chars. Only the author may edit; author or admin may delete.
+- Body max 40,000 characters (Unicode code points). The client folds anything over 10,000 behind a "Show more" button, and refuses an over-long send up front with a count instead of letting it fail. Drafts are never truncated. Only the author may edit; author or admin may delete.
 - Soft-deleted messages come back with `deleted_at` set and `body: ""`.
 - `{emoji}` is URL-encoded; server caps it at 24 bytes.
 - Posting a message joins the sender to a public channel automatically.
@@ -316,6 +316,7 @@ curl -H "Authorization: Bearer slk_..." \
   opens the DM if it does not exist yet.
 - The message is the **request body**, or `?msg=` if that is easier. Both are
   percent-decoded normally, so newlines and emoji work.
+- Up to 40,000 characters per call, the same limit as the app. The raw body may be up to 512 KB, enough for a full-length message even when it's all emoji and form-encoded (`--data-urlencode`). For long text prefer the body (`-d @file.txt` or `--data-binary @file.txt`) over `?msg=`: very long URLs get cut by proxies and tools.
 - Responses are plain text: `201` with `ok <message id>`, otherwise a 4xx with
   one line saying why.
 - The token goes in a **header, never the URL** — query strings end up in proxy

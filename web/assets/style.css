@@ -965,6 +965,19 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
 }
 .msg-retry:hover, .msg-retry:focus-visible { text-decoration-thickness: 2px; }
 
+/* "Show more" under a folded long message (JS inserts it after .msg-body) */
+.msg-more {
+  display: block;
+  margin-block-start: var(--sp-1);
+  padding: 0;
+  color: var(--accent);
+  font-size: var(--fs-s);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.msg-more:hover, .msg-more:focus-visible { text-decoration-thickness: 2px; }
+
 /* brief attention flash after a palette jump; JS removes the class shortly */
 .msg--highlight { animation: msg-flash 2.2s var(--ease); }
 @keyframes msg-flash {

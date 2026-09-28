@@ -20,9 +20,11 @@ import (
 // chat message is recognisable (and greppable in a secret scanner).
 const tokenPrefix = "slk_"
 
-// maxSendBody bounds the message an external caller may post. Well under the
-// 8000-rune message limit, which this then re-checks anyway.
-const maxSendBody = 64 << 10
+// maxSendBody bounds the raw request body an external caller may post. It must
+// fit a full maxBodyRunes message in the worst case: 4 UTF-8 bytes per rune,
+// tripled by form encoding (%XX per byte) — 40000 × 4 × 3 = 480 KB. The rune
+// limit is then checked on the decoded text.
+const maxSendBody = 512 << 10
 
 // APIToken is the wire form of a token. The secret itself is only ever
 // returned once, at creation.

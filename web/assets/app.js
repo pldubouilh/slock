@@ -514,7 +514,7 @@ function makeMsgEl(m, prev, st) {
   const body = el.querySelector('.msg-body');
   if (body) {
     if (m.deleted_at) body.textContent = 'Message deleted';
-    else renderBody(body, m.body || '');
+    else renderFoldedBody(body, m);
   }
 
   const attWrap = el.querySelector('.msg-attachments');
@@ -561,6 +561,45 @@ function makeMsgEl(m, prev, st) {
     (body ? body.parentElement : el).append(retry);
   }
   return el;
+}
+
+// Messages longer than FOLD_AT characters render only their first FOLD_AT,
+// with a "Show more" button under the body, so one giant paste doesn't take
+// over the channel. Expanding is per message and lasts the session (a
+// re-render for a reaction or pin must not fold it back).
+const FOLD_AT = 10000;
+const unfoldedMsgs = new Set(); // message ids / client ids the reader expanded
+
+function msgKey(m) {
+  return m.id ? 'id:' + m.id : 'c:' + m.client_id;
+}
+
+function renderFoldedBody(bodyEl, m) {
+  const text = m.body || '';
+  // Cheap guard first: a string of ≤ FOLD_AT UTF-16 units can't hold more
+  // than FOLD_AT characters, so the common case never splits the string.
+  if (text.length <= FOLD_AT || unfoldedMsgs.has(msgKey(m))) {
+    renderBody(bodyEl, text);
+    return;
+  }
+  const chars = [...text]; // code points, like the server's limit
+  if (chars.length <= FOLD_AT) {
+    renderBody(bodyEl, text);
+    return;
+  }
+  // Cut at the last line break shortly before the limit, so markdown isn't
+  // split mid-line; fall back to a hard cut for one enormous line.
+  let shown = chars.slice(0, FOLD_AT).join('');
+  const nl = shown.lastIndexOf('\n');
+  if (nl > shown.length * 0.8) shown = shown.slice(0, nl);
+  renderBody(bodyEl, shown + '…');
+
+  const hidden = chars.length - [...shown].length;
+  const more = document.createElement('button');
+  more.type = 'button';
+  more.className = 'msg-more';
+  more.textContent = `Show more (${hidden.toLocaleString()} more characters)`;
+  bodyEl.after(more);
 }
 
 function makeAttachmentEl(att) {
@@ -1382,7 +1421,10 @@ function autogrow() {
 /* -------- drafts: survive channel switches, reloads and deploys.
    localStorage `slock:drafts` maps channelId -> {text, edit_id?}. */
 
-const DRAFT_MAX = 8000;
+// The server's message limit, in characters (code points, like Go's runes).
+// Drafts are never cut to it: a draft over the limit is still the user's text,
+// and send refuses it with a count instead of losing any of it.
+const MSG_MAX = 40000;
 let drafts = {};
 try { drafts = JSON.parse(localStorage.getItem(LS.drafts) || '{}') || {}; } catch { drafts = {}; }
 
@@ -1401,7 +1443,7 @@ function saveDraftFor(channelId) {
   if (!channelId) return;
   const ta = byId('composer-input');
   if (!ta) return;
-  const text = ta.value.slice(0, DRAFT_MAX);
+  const text = ta.value;
   if (!text.trim() && !state.editingId) {
     delete drafts[channelId];
   } else {
@@ -1494,7 +1536,7 @@ function cancelEdit() {
     ta.focus();
   }
   if (channelId) {
-    if (prev.trim()) drafts[channelId] = { text: prev.slice(0, DRAFT_MAX) };
+    if (prev.trim()) drafts[channelId] = { text: prev };
     else delete drafts[channelId];
     persistDrafts();
   }
@@ -1537,6 +1579,14 @@ async function submitComposer() {
   closeEmojiAuto();
   const body = replaceShortcodes(ta.value.replace(/\s+$/, ''));
 
+  // Refuse up front, text untouched, rather than letting the server bounce it
+  // into a failed message. Counted in code points, as the server does.
+  const length = [...body].length;
+  if (length > MSG_MAX) {
+    toast(`Message is too long: ${length.toLocaleString()} / ${MSG_MAX.toLocaleString()} characters`, true);
+    return;
+  }
+
   if (state.editingId) {
     const id = state.editingId;
     const editChannelId = state.currentId;
@@ -1547,7 +1597,7 @@ async function submitComposer() {
       applyMessageUpdate(data.message);
     } catch {
       // Toasted by api(); make sure the edited text is never lost.
-      drafts[editChannelId] = { text: body.slice(0, DRAFT_MAX), edit_id: id };
+      drafts[editChannelId] = { text: body, edit_id: id };
       persistDrafts();
       if (state.currentId === editChannelId && !state.editingId) {
         startEdit(id);
@@ -5277,6 +5327,22 @@ function wireMessageList() {
 
     if (e.target.closest('.msg-retry')) {
       if (clientId) retrySend(state.currentId, clientId);
+      return;
+    }
+    if (e.target.closest('.msg-more')) {
+      const st = chanState(state.currentId);
+      const m = (msgId && st.byId.get(msgId)) || (clientId && st.byClient.get(clientId));
+      if (m) {
+        unfoldedMsgs.add(msgKey(m));
+        // Keep the reader where they are: the text grows below the fold.
+        const sc = byId('message-scroll');
+        const top = sc ? sc.scrollTop : 0;
+        const wasAtBottom = state.atBottom;
+        state.atBottom = false; // refreshMsgEl must not jump to the bottom
+        refreshMsgEl(state.currentId, m);
+        state.atBottom = wasAtBottom;
+        if (sc) sc.scrollTop = top;
+      }
       return;
     }
     // A person (name or picture) is a door to their DM.
