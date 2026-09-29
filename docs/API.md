@@ -139,6 +139,8 @@ list ones you have not joined) plus private channels you belong to. `dms` holds
 only DM channels you belong to that have at least one message or were opened by
 you.
 
+`POST /api/dms` with your own `user_id` gets-or-creates your self-DM (one member, `peer_user_id` = you). The client presents it as **Notes**: a fixed sidebar row under Latest, left out of the DM list. It never notifies or counts as unread, since push and unread both skip the message's own author.
+
 Channel names: lowercase, 1–40 chars, `[a-z0-9-_]`, unique. The server
 normalises (lowercases, spaces → `-`). Duplicate name → `409 conflict`.
 

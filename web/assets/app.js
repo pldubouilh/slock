@@ -236,8 +236,39 @@ function isMuted(ch) {
   return !!(ch && ch.muted);
 }
 
+// Notes is your DM with yourself (the server already supports a one-member
+// "N:N" DM). It gets a fixed sidebar row under Latest instead of a spot in the
+// DM list, and is called "Notes" everywhere.
+function isNotesChannel(ch) {
+  return !!(ch && ch.kind === 'dm' && state.me && ch.peer_user_id === state.me.id);
+}
+
+function notesChannel() {
+  for (const ch of state.channels.values()) {
+    if (isNotesChannel(ch)) return ch;
+  }
+  return null;
+}
+
+// Open Notes, creating the self-DM on first use.
+async function openNotes() {
+  const existing = notesChannel();
+  if (existing) {
+    reopenDM(existing.id); // in case it was closed from the DM list before Notes existed
+    openChannel(existing.id);
+    return;
+  }
+  if (!state.me || blockedOffline('Notes')) return;
+  try {
+    const data = await api('/api/dms', { method: 'POST', body: { user_id: state.me.id } });
+    mergeChannel(data.channel);
+    openChannel(data.channel.id);
+  } catch { /* toasted */ }
+}
+
 function channelDisplayName(ch) {
   if (!ch) return '';
+  if (isNotesChannel(ch)) return 'Notes';
   if (ch.kind === 'dm') {
     const peer = state.users.get(ch.peer_user_id);
     return peer ? peer.display_name : 'Direct message';
@@ -365,7 +396,7 @@ function sortedDMs() {
   return [...state.channels.values()]
     // closedDMs = device-locally hidden conversations; a new message or a
     // deliberate reopen (reopenDM) puts them back.
-    .filter((c) => c.kind === 'dm' && !closedDMs.has(c.id))
+    .filter((c) => c.kind === 'dm' && !closedDMs.has(c.id) && !isNotesChannel(c))
     .sort((a, b) => (isChannelPinned(b.id) - isChannelPinned(a.id))
       || String(b.last_message_at || '').localeCompare(String(a.last_message_at || '')));
 }
@@ -422,6 +453,8 @@ function renderSidebar() {
       dmList.append(li);
     }
   }
+  const notesRow = byId('notes-row');
+  if (notesRow) notesRow.classList.toggle('chan--active', isNotesChannel(state.channels.get(state.currentId)));
   renderMeChip();
 }
 
@@ -1376,6 +1409,7 @@ const LATEST_ICON = {
   hash: '<path d="M7.7 3.5 6.2 16.5M13.8 3.5l-1.5 13M4 7.3h13M3 12.7h13"/>',
   lock: '<rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/>',
   dm: '<path d="M4 4.5h12a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3H4A1.5 1.5 0 0 1 2.5 13V6A1.5 1.5 0 0 1 4 4.5Z"/>',
+  notes: '<path d="M5.5 2.5h7l3 3v11a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1Z"/><path d="M7.5 9h5M7.5 12h5M7.5 15h3"/>',
 };
 
 // The channel a feed row came from, as a small tag leading the header line.
@@ -1384,7 +1418,12 @@ function makeLatestChanTag(ch) {
   tag.className = 'latest-chan';
   let icon = LATEST_ICON.hash;
   let label = ch.name;
-  if (ch.kind === 'dm') {
+  if (isNotesChannel(ch)) {
+    icon = LATEST_ICON.notes;
+    label = 'Notes';
+    tag.classList.add('latest-chan--dm');
+    tag.title = 'Your notes';
+  } else if (ch.kind === 'dm') {
     const peer = state.users.get(ch.peer_user_id);
     icon = LATEST_ICON.dm;
     label = peer ? peer.display_name : 'Direct message';
@@ -1594,6 +1633,13 @@ function renderChannelHeader() {
   if (infoBtn) infoBtn.hidden = !ch || isDM;
   const closeBtn = byId('close-dm-btn');
   if (closeBtn) closeBtn.hidden = !isDM;
+
+  // Notes: nothing to mute (it never notifies), pin (it has its own row) or
+  // close (ditto).
+  if (isNotesChannel(ch)) {
+    if (topic) { topic.textContent = 'Only you can see these'; topic.hidden = false; }
+    for (const b of [muteBtn, pinChanBtn, closeBtn]) if (b) b.hidden = true;
+  }
 
   // The Latest meta-channel: no channel behind it (every button above hid
   // itself), just a title, what it's showing, and details for its toggles.
@@ -3217,6 +3263,19 @@ function localPaletteEntries(q) {
     }
   }
   if (!biasChannels) {
+    // Notes, findable by name (you are otherwise left out of the people below).
+    const notesScore = needle ? fuzzyScore(needle, 'Notes') : 0;
+    if (notesScore >= 0 && state.me) {
+      const notes = notesChannel();
+      entries.push({
+        kind: 'notes', id: notes ? notes.id : 0, score: notesScore,
+        unread: false,
+        recency: (notes && notes.last_message_at) || '',
+        title: 'Notes',
+        sub: 'Only you can see these',
+        icon: '✎',
+      });
+    }
     const dmByPeer = new Map();
     for (const ch of state.channels.values()) {
       if (ch.kind === 'dm') dmByPeer.set(ch.peer_user_id, ch);
@@ -3410,7 +3469,8 @@ function movePaletteActive(delta) {
 // Open (creating if needed) the DM with userId. The one path for every
 // "click a person" affordance: palette, DM picker, message author/avatar.
 async function openDMWith(userId) {
-  if (!userId || (state.me && userId === state.me.id)) return;
+  if (!userId) return;
+  if (state.me && userId === state.me.id) { openNotes(); return; } // your own name/avatar
   const u = state.users.get(userId);
   if (u && u.is_bot) return; // bots are posted to, not chatted with
   try {
@@ -3428,6 +3488,8 @@ async function pickPaletteEntry(entry) {
     openChannel(entry.id);
   } else if (entry.kind === 'user') {
     openDMWith(entry.id);
+  } else if (entry.kind === 'notes') {
+    openNotes();
   }
 }
 
@@ -5761,6 +5823,7 @@ function wireSidebar() {
   on(byId('channel-list'), 'click', open);
   on(byId('dm-list'), 'click', open);
   on(byId('latest-row'), 'click', () => openLatest());
+  on(byId('notes-row'), 'click', () => openNotes());
   on(byId('new-channel-btn'), 'click', openNewChannelModal);
   on(byId('new-dm-btn'), 'click', openNewDMModal);
   on(byId('fold-channels'), 'click', () => setSectionFolded('channel', !foldChans));
