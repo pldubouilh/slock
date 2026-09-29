@@ -113,6 +113,7 @@ func (s *Server) Routes() http.Handler {
 
 	// -- search ----------------------------------------------------------
 	mux.HandleFunc("GET /api/search", s.auth(s.handleSearch))
+	mux.HandleFunc("GET /api/latest", s.auth(s.handleLatest))
 
 	// -- realtime --------------------------------------------------------
 	mux.HandleFunc("GET /api/events", s.auth(s.handleEvents))

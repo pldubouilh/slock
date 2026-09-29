@@ -829,6 +829,70 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
    too heavy. Touch has no hover; there the long-press .msg--held state is the
    equivalent, and it does tint so the held row is unmistakable. */
 
+/* ---- the "Latest" meta-channel (body.view-latest): a read-only feed.
+   Each row is a whole link to its message; the channel it came from leads the
+   header line as a small tag; the text is clamped to three lines. */
+body.view-latest #composer,
+body.view-latest #typing-indicator { display: none; }
+.side-list--meta { padding-top: var(--sp-2); }
+
+.msg--latest { cursor: pointer; padding-block: 7px; }
+.msg--latest:hover,
+.msg--latest:focus-visible { background: color-mix(in srgb, var(--bg-2) 55%, transparent); }
+.msg--latest:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
+.msg--latest .msg-author, .msg--latest .msg-avatar { cursor: pointer; }
+.msg--latest .msg-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  max-height: 4.5em; /* 3 × line-height 1.5, for blocks the clamp can't count */
+}
+.msg--latest .msg-body pre,
+.msg--latest .msg-body blockquote { margin-block: 0; overflow: hidden; }
+
+.latest-chan {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+  max-width: 40%;
+  padding: 1px 8px 1px 6px;
+  border-radius: var(--r-full);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 1;
+}
+.latest-chan .ic { flex-shrink: 0; }
+.latest-chan--dm {
+  background: color-mix(in srgb, var(--text-2) 12%, transparent);
+  color: var(--text-2);
+}
+
+.latest-files {
+  margin-top: 2px;
+  font-size: var(--fs-s);
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.latest-files::before { content: "📎 "; }
+
+.latest-empty {
+  padding: var(--sp-6, 32px) var(--sp-4);
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-s);
+}
+
 /* Desktop only: while the list is moving, don't let the row under a stationary
    cursor pop its toolbar. Never applied on touch — there it blocked the
    touchstart that arms a long-press, so the first press after a scroll was

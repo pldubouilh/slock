@@ -186,6 +186,7 @@ const state = {
   channels: new Map(),     // id -> Channel (channels + dms)
   chan: new Map(),         // id -> per-channel message state
   currentId: null,
+  latest: false,           // the "Latest" meta-channel is showing (currentId is null then)
   online: new Set(),       // user ids
   typing: new Map(),       // channelId -> Map(userId -> expiresAt)
   connected: false,
@@ -211,8 +212,10 @@ const LS = {
   foldDMs: 'slock:fold-dms',
   sound: 'slock:sound',
   font: 'slock:font',
-  lastChannel: 'slock:last-channel',
+  lastChannel: 'slock:last-channel', // a channel id, or 'latest'
   drafts: 'slock:drafts',
+  latestFaves: 'slock:latest-faves', // '1' = Latest shows pinned channels only
+  latestDMs: 'slock:latest-dms',     // '0' = Latest leaves DMs out
 };
 
 function chanState(id) {
@@ -1140,12 +1143,15 @@ async function openChannel(channelId, opts = {}) {
     persistDrafts();      // also when re-opening the same channel
     if (prevId !== channelId) flushMarkRead(); // commit the read we are leaving
   }
+  const fromLatest = state.latest;
+  if (fromLatest) setLatestView(false);
   state.currentId = channelId;
   resetComposerMode();
   localStorage.setItem(LS.lastChannel, String(channelId));
-  // A real swap earns a history entry, so back walks the channels visited.
-  // Re-opening the same channel, or arriving from popstate, must not.
-  if (!opts.fromHistory) markHistory(channelId, !prevId || prevId === channelId);
+  // A real swap earns a history entry, so back walks the channels visited
+  // (leaving Latest counts). Re-opening the same channel, or arriving from
+  // popstate, must not.
+  if (!opts.fromHistory) markHistory(channelId, !(prevId || fromLatest) || prevId === channelId);
   document.body.classList.remove('nav-open');
   closeEmojiPicker();
   closeHeaderMenu();
@@ -1213,6 +1219,310 @@ async function jumpToMessage(channelId, msgId) {
   } else {
     scrollToBottom();
   }
+}
+
+/* ============================================================ latest (meta-channel)
+   "Latest" is one read-only feed of the newest messages from every channel and
+   DM you're in. Each row is the message as its sender wrote it, clamped to
+   three lines, with the channel named beside the avatar; clicking one opens it
+   in its channel. It has no unread count, no notifications and no composer,
+   and it is not a real channel: while it shows, state.currentId is null and
+   state.latest is true. It is fetched fresh on every open and kept live by
+   message.new while open; nothing maintains it in the background. */
+
+const LATEST_PAGE = 50;
+const latest = {
+  msgs: [], byId: new Map(),
+  loaded: false, hasMore: false, loading: false,
+  retryAt: 0, // don't re-ask for older pages before this (see loadOlder)
+  seq: 0,     // bumps on every fresh load; stale responses are dropped
+};
+
+// Device-local toggles, edited in the Latest details dialog.
+let latestFavesOnly = false; // named channels: pinned ones only
+let latestWithDMs = true;
+try {
+  latestFavesOnly = localStorage.getItem(LS.latestFaves) === '1';
+  latestWithDMs = localStorage.getItem(LS.latestDMs) !== '0';
+} catch { /* storage blocked: defaults */ }
+
+function setLatestPrefs(favesOnly, withDMs) {
+  latestFavesOnly = !!favesOnly;
+  latestWithDMs = !!withDMs;
+  try {
+    if (latestFavesOnly) localStorage.setItem(LS.latestFaves, '1');
+    else localStorage.removeItem(LS.latestFaves);
+    if (!latestWithDMs) localStorage.setItem(LS.latestDMs, '0');
+    else localStorage.removeItem(LS.latestDMs);
+  } catch { /* in-memory only */ }
+}
+
+// Whether a message belongs in the feed under the current toggles (the server
+// applies the same rules to what it returns; this is for live messages).
+function latestWants(m) {
+  if (!m || !m.id || m.kind === 'system' || m.deleted_at) return false;
+  const ch = state.channels.get(m.channel_id);
+  if (!ch) return false;
+  if (ch.kind === 'dm') return latestWithDMs;
+  return !!ch.is_member && (!latestFavesOnly || isChannelPinned(ch.id));
+}
+
+function latestURL(before) {
+  const qs = new URLSearchParams({ limit: String(LATEST_PAGE) });
+  if (!latestWithDMs) qs.set('dms', '0');
+  if (latestFavesOnly) qs.set('only', [...pinnedChans].join(','));
+  if (before) qs.set('before', String(before));
+  return `/api/latest?${qs}`;
+}
+
+function setLatestView(on) {
+  state.latest = on;
+  document.body.classList.toggle('view-latest', on);
+  const row = byId('latest-row');
+  if (row) row.classList.toggle('chan--active', on);
+  if (!on) {
+    latest.seq++; // drop any page still in flight
+    latest.loaded = false;
+    latest.msgs = [];
+    latest.byId = new Map();
+  }
+}
+
+async function openLatest(opts = {}) {
+  const prevId = state.currentId;
+  const wasLatest = state.latest;
+  if (prevId) {
+    saveDraftFor(prevId);
+    persistDrafts();
+    flushMarkRead();
+  }
+  state.currentId = null;
+  setLatestView(true);
+  resetComposerMode();
+  // The composer is hidden here, but its text must not follow into the next
+  // channel opened (restoreDraft only fills in a channel that has a draft).
+  const ta = byId('composer-input');
+  if (ta) { ta.value = ''; autogrow(); }
+  try { localStorage.setItem(LS.lastChannel, 'latest'); } catch { /* fine */ }
+  if (!opts.fromHistory) markHistory('latest', wasLatest || !prevId);
+  document.body.classList.remove('nav-open');
+  closeEmojiPicker();
+  closeHeaderMenu();
+  renderSidebar();
+  renderChannelHeader();
+  renderTyping();
+  await loadLatest();
+}
+
+async function loadLatest() {
+  const seq = ++latest.seq;
+  const list = byId('message-list');
+  if (list && !latest.loaded) list.textContent = ''; // never show the last channel under this title
+  const loader = byId('message-loader');
+  if (loader) loader.hidden = false;
+  try {
+    const data = await api(latestURL(0), { toast: false });
+    if (seq !== latest.seq || !state.latest) return;
+    latest.msgs = data.messages;
+    latest.byId = new Map(data.messages.map((m) => [m.id, m]));
+    latest.hasMore = !!data.has_more;
+    latest.loaded = true;
+    latest.retryAt = 0;
+  } catch {
+    // Offline or failing: an empty feed; the connection banner says why.
+    if (seq !== latest.seq || !state.latest) return;
+    latest.msgs = [];
+    latest.byId = new Map();
+    latest.hasMore = false;
+    latest.loaded = false;
+  } finally {
+    if (loader) loader.hidden = true;
+  }
+  renderLatestFull();
+  state.atBottom = true;
+  scrollToBottom();
+  updateJumpLatest();
+}
+
+async function loadOlderLatest() {
+  if (!state.latest || !latest.loaded || latest.loading || !latest.hasMore) return;
+  if (latest.retryAt && Date.now() < latest.retryAt) return;
+  const oldest = latest.msgs[0];
+  if (!oldest) return;
+  const seq = latest.seq;
+  latest.loading = true;
+  const loader = byId('message-loader');
+  if (loader) loader.hidden = false;
+  try {
+    const data = await api(latestURL(oldest.id), { toast: false });
+    if (seq !== latest.seq || !state.latest) return;
+    const fresh = data.messages.filter((m) => !latest.byId.has(m.id));
+    latest.hasMore = !!data.has_more;
+    if (fresh.length) {
+      latest.msgs = fresh.concat(latest.msgs);
+      for (const m of fresh) latest.byId.set(m.id, m);
+      prependLatest(fresh);
+    }
+    latest.retryAt = 0;
+  } catch {
+    latest.retryAt = Date.now() + OLDER_RETRY_MS;
+  } finally {
+    latest.loading = false;
+    if (loader) loader.hidden = true;
+  }
+}
+
+const LATEST_ICON = {
+  hash: '<path d="M7.7 3.5 6.2 16.5M13.8 3.5l-1.5 13M4 7.3h13M3 12.7h13"/>',
+  lock: '<rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/>',
+  dm: '<path d="M4 4.5h12a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3H4A1.5 1.5 0 0 1 2.5 13V6A1.5 1.5 0 0 1 4 4.5Z"/>',
+};
+
+// The channel a feed row came from, as a small tag leading the header line.
+function makeLatestChanTag(ch) {
+  const tag = document.createElement('span');
+  tag.className = 'latest-chan';
+  let icon = LATEST_ICON.hash;
+  let label = ch.name;
+  if (ch.kind === 'dm') {
+    const peer = state.users.get(ch.peer_user_id);
+    icon = LATEST_ICON.dm;
+    label = peer ? peer.display_name : 'Direct message';
+    tag.classList.add('latest-chan--dm');
+    tag.title = 'Direct message';
+  } else if (ch.is_private) {
+    icon = LATEST_ICON.lock;
+  }
+  // Static markup only; the name goes in as a text node.
+  tag.innerHTML = `<svg class="ic" viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>`;
+  tag.append(document.createTextNode(label));
+  return tag;
+}
+
+function makeLatestEl(m) {
+  const el = makeMsgEl(m, null, null);
+  if (!el.classList) return el; // template missing
+  el.classList.add('msg--latest');
+  el.tabIndex = 0;
+  el.setAttribute('role', 'link');
+  el.querySelector('.msg-actions')?.remove();
+  el.querySelector('.msg-more')?.remove(); // the three-line clamp is the fold here
+  el.querySelector('.msg-reactions')?.remove();
+  // Attachments shrink to a one-line list of names: a feed, not a gallery.
+  const att = el.querySelector('.msg-attachments');
+  if (att) {
+    att.textContent = '';
+    const names = (m.attachments || []).map((a) => a.filename);
+    att.hidden = !names.length;
+    if (names.length) {
+      att.classList.add('latest-files');
+      att.textContent = names.join(', ');
+    }
+  }
+  const ch = state.channels.get(m.channel_id);
+  const head = el.querySelector('.msg-head');
+  if (head && ch) head.prepend(makeLatestChanTag(ch));
+  return el;
+}
+
+function renderLatestFull() {
+  const list = byId('message-list');
+  if (!list || !state.latest) return;
+  list.textContent = '';
+  const frag = document.createDocumentFragment();
+  let prev = null;
+  for (const m of latest.msgs) {
+    if (!prev || dayKey(prev.created_at) !== dayKey(m.created_at)) frag.append(makeDayDivider(m.created_at));
+    frag.append(makeLatestEl(m));
+    prev = m;
+  }
+  if (!latest.msgs.length && latest.loaded) {
+    const empty = document.createElement('li');
+    empty.className = 'latest-empty';
+    empty.textContent = latestFavesOnly && !pinnedChans.size
+      ? 'No pinned channels yet. Pin one from its header, or turn off “Pinned channels only” in details.'
+      : 'Nothing here yet.';
+    frag.append(empty);
+  }
+  list.append(frag);
+}
+
+function prependLatest(msgs) {
+  const list = byId('message-list');
+  const sc = byId('message-scroll');
+  if (!list || !sc || !state.latest) return;
+  const last = msgs[msgs.length - 1];
+  const first = list.firstElementChild;
+  if (first && first.classList.contains('day-divider') && first.dataset.day === dayKey(last.created_at)) {
+    first.remove();
+  }
+  const frag = document.createDocumentFragment();
+  let prev = null;
+  for (const m of msgs) {
+    if (!prev || dayKey(prev.created_at) !== dayKey(m.created_at)) frag.append(makeDayDivider(m.created_at));
+    frag.append(makeLatestEl(m));
+    prev = m;
+  }
+  const before = sc.scrollHeight;
+  list.prepend(frag);
+  sc.scrollTop += sc.scrollHeight - before;
+}
+
+// A live message.new while the feed is showing.
+function appendLatest(m) {
+  const list = byId('message-list');
+  if (!list) return;
+  const prev = latest.msgs[latest.msgs.length - 1] || null;
+  latest.msgs.push(m);
+  latest.byId.set(m.id, m);
+  list.querySelector('.latest-empty')?.remove();
+  if (!prev || dayKey(prev.created_at) !== dayKey(m.created_at)) list.append(makeDayDivider(m.created_at));
+  list.append(makeLatestEl(m));
+  if (state.atBottom) scrollToBottom();
+}
+
+function latestElFor(id) {
+  const list = byId('message-list');
+  return list && list.querySelector(`.msg--latest[data-id="${id}"]`);
+}
+
+// message.update / message.delete for a row in the feed.
+function latestOnUpdate(m) {
+  if (!state.latest || !m) return;
+  const local = latest.byId.get(m.id);
+  if (!local) return;
+  Object.assign(local, m);
+  const el = latestElFor(m.id);
+  if (el) el.replaceWith(makeLatestEl(local));
+}
+
+function latestOnDelete(id) {
+  if (!state.latest || !latest.byId.has(id)) return;
+  latest.byId.delete(id);
+  latest.msgs = latest.msgs.filter((m) => m.id !== id);
+  const el = latestElFor(id);
+  if (el) el.remove();
+}
+
+function openLatestModal() {
+  const m = openModal('tpl-modal-latest');
+  if (!m) return;
+  const faves = m.q('[name=faves_only]');
+  const dms = m.q('[name=dms]');
+  if (faves) faves.checked = latestFavesOnly;
+  if (dms) dms.checked = latestWithDMs;
+  const apply = () => {
+    setLatestPrefs(faves ? faves.checked : latestFavesOnly, dms ? dms.checked : latestWithDMs);
+    renderChannelHeader();
+    if (state.latest) loadLatest();
+  };
+  on(faves, 'change', apply);
+  on(dms, 'change', apply);
+}
+
+function latestSubtitle() {
+  const what = latestFavesOnly ? 'pinned channels' : 'your channels';
+  return latestWithDMs ? `Newest messages from ${what} and DMs` : `Newest messages from ${what}`;
 }
 
 // A pasted slock link ("…/?c=5&m=42") is just an <a> in a message body. Rather
@@ -1284,6 +1594,18 @@ function renderChannelHeader() {
   if (infoBtn) infoBtn.hidden = !ch || isDM;
   const closeBtn = byId('close-dm-btn');
   if (closeBtn) closeBtn.hidden = !isDM;
+
+  // The Latest meta-channel: no channel behind it (every button above hid
+  // itself), just a title, what it's showing, and details for its toggles.
+  if (state.latest) {
+    if (title) title.textContent = 'Latest';
+    if (topic) { topic.textContent = latestSubtitle(); topic.hidden = false; }
+    if (infoBtn) infoBtn.hidden = false;
+  }
+  if (infoBtn) {
+    infoBtn.title = state.latest ? 'Latest details' : 'Channel details';
+    infoBtn.setAttribute('aria-label', infoBtn.title);
+  }
 }
 
 /* ============================================================ read state / badges */
@@ -2583,6 +2905,8 @@ function connectSSE() {
         // Fill it for real now; otherwise just close the gap.
         if (st.loaded) gapFill(state.currentId);
         else openChannel(state.currentId, { fromHistory: true, noFocus: true });
+      } else if (state.latest) {
+        loadLatest(); // whatever arrived during the gap
       }
     }
   });
@@ -2591,6 +2915,7 @@ function connectSSE() {
   es.addEventListener('message.update', (e) => applyMessageUpdate(JSON.parse(e.data).message));
   es.addEventListener('message.delete', (e) => {
     const { message_id, channel_id } = JSON.parse(e.data);
+    latestOnDelete(message_id);
     const st = chanState(channel_id);
     const m = st.byId.get(message_id);
     if (m) {
@@ -2735,6 +3060,10 @@ function onMessageNew(data) {
   ch.last_message_at = m.created_at;
   reopenDM(channelId); // a message resurfaces a locally hidden DM
 
+  // The Latest feed, when it's showing. It never counts as "seen": the unread
+  // and sound logic below runs exactly as if you were in any other channel.
+  if (state.latest && latest.loaded && latestWants(m) && !latest.byId.has(m.id)) appendLatest(m);
+
   const st = chanState(channelId);
 
   // Clear this author's typing state.
@@ -2789,6 +3118,7 @@ function onMessageNew(data) {
 
 function applyMessageUpdate(m) {
   if (!m) return;
+  latestOnUpdate(m);
   const st = chanState(m.channel_id);
   const local = st.byId.get(m.id);
   if (!local) return;
@@ -3327,11 +3657,17 @@ function openNewChannelModal() {
 
 // #info-btn: reuse the new-channel form to rename / retopic, plus leave.
 function openChannelInfoModal() {
+  if (state.latest) { openLatestModal(); return; } // device-local toggles: fine offline
   if (blockedOffline('Channel details')) return;
   const ch = state.channels.get(state.currentId);
   if (!ch || ch.kind === 'dm') return;
   const m = openModal('tpl-modal-new-channel');
   if (!m) return;
+  // Same form as "New channel", but this is the channel's details.
+  const heading = m.q('.modal-title');
+  if (heading) heading.textContent = 'Channel details';
+  const dialog = m.q('.modal');
+  if (dialog) dialog.setAttribute('aria-label', 'Channel details');
   const form = m.q('form') || m.q('.mform');
   if (!form) return;
   const nameEl = form.querySelector('[name=name]');
@@ -3645,6 +3981,7 @@ function togglePinChannel(id) {
   else localStorage.removeItem(LS.pinnedChans);
   renderSidebar();
   renderChannelHeader();
+  if (state.latest && latestFavesOnly) loadLatest(); // the pinned set is its filter
   const ch = state.channels.get(id);
   const pinned = pinnedChans.has(id);
   if (ch) toast(pinned ? `Pinned ${channelDisplayName(ch)}` : `Unpinned ${channelDisplayName(ch)}`);
@@ -5248,7 +5585,10 @@ function wireMessageList() {
         maybeMarkRead();
       }
       updateJumpLatest();
-      if (sc.scrollTop < 240 && state.currentId) loadOlder(state.currentId);
+      if (sc.scrollTop < 240) {
+        if (state.currentId) loadOlder(state.currentId);
+        else if (state.latest) loadOlderLatest();
+      }
     }, { passive: true });
     // Re-arm hover only on real pointer movement. Chrome re-dispatches a
     // synthetic mousemove at the old coordinates after a scroll to refresh
@@ -5282,7 +5622,7 @@ function wireMessageList() {
     const row = e.target.closest('.msg');
     const held = list.querySelector('.msg--held');
     if (held && held !== row) clearHeldMsg(); // tapping elsewhere lets go
-    if (!row || row.classList.contains('msg--system')
+    if (!row || row.classList.contains('msg--system') || row.classList.contains('msg--latest')
       || e.target.closest('.att-img') || e.target.closest('.msg-actions')) return;
     // A finger landing on a coasting list is there to stop the scroll — it
     // must never read as the start of a long-press.
@@ -5315,7 +5655,23 @@ function wireMessageList() {
   list.addEventListener('touchend', cancelHold, { passive: true });
   list.addEventListener('touchcancel', clearHeldMsg, { passive: true });
 
+  // A Latest row is one big link to its message in its channel. Links inside
+  // the text keep working (in-app ones are routed by wireInternalLinks).
+  const openLatestRow = (row) => {
+    const m = latest.byId.get(Number(row.dataset.id));
+    if (m) openChannel(m.channel_id, { jumpTo: m.id });
+  };
+  list.addEventListener('keydown', (e) => {
+    const row = state.latest && e.key === 'Enter' && e.target.closest('.msg--latest');
+    if (row) { e.preventDefault(); openLatestRow(row); }
+  });
+
   list.addEventListener('click', (e) => {
+    if (state.latest) {
+      const row = e.target.closest('.msg--latest');
+      if (row && !e.target.closest('a[href]')) openLatestRow(row);
+      return;
+    }
     const msgEl = e.target.closest('.msg');
     if (!msgEl) return;
     const msgId = Number(msgEl.dataset.id) || 0;
@@ -5404,6 +5760,7 @@ function wireSidebar() {
   };
   on(byId('channel-list'), 'click', open);
   on(byId('dm-list'), 'click', open);
+  on(byId('latest-row'), 'click', () => openLatest());
   on(byId('new-channel-btn'), 'click', openNewChannelModal);
   on(byId('new-dm-btn'), 'click', openNewDMModal);
   on(byId('fold-channels'), 'click', () => setSectionFolded('channel', !foldChans));
@@ -5628,7 +5985,10 @@ function wireKeyboard() {
 function wireBackButton() {
   const guarded = matchMedia('(display-mode: standalone)').matches
     || matchMedia('(max-width: 760px)').matches;
-  const trap = () => { if (state.currentId) markHistory(state.currentId, false, true); };
+  const trap = () => {
+    const here = state.latest ? 'latest' : state.currentId;
+    if (here) markHistory(here, false, true);
+  };
   if (guarded) trap();
   window.addEventListener('popstate', (e) => {
     if (guarded) {
@@ -5640,8 +6000,12 @@ function wireBackButton() {
       // Put back the entry that press consumed, so the trail stays put.
       if (closedSomething) { trap(); return; }
     }
-    const id = Number((e.state && e.state.c)
-      || new URLSearchParams(location.search).get('c'));
+    const target = (e.state && e.state.c) || new URLSearchParams(location.search).get('c');
+    if (target === 'latest') {
+      if (!state.latest) openLatest({ fromHistory: true });
+      return;
+    }
+    const id = Number(target);
     if (id && id !== state.currentId && state.channels.has(id)) {
       openChannel(id, { fromHistory: true });
       return;
@@ -5903,15 +6267,22 @@ async function boot() {
   updateBadges();
 
   // Pick the channel to open: ?c= → last visited → first member channel → first.
+  // "latest" (in ?c= or remembered) opens the Latest meta-channel instead.
   const params = new URLSearchParams(location.search);
-  let target = Number(params.get('c')) || Number(localStorage.getItem(LS.lastChannel)) || 0;
-  if (!state.channels.has(target)) target = 0;
-  if (!target) {
-    const member = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
-    target = member ? member.id : 0;
+  const wantLatest = params.get('c') === 'latest'
+    || (!params.get('c') && localStorage.getItem(LS.lastChannel) === 'latest');
+  if (wantLatest) {
+    await openLatest();
+  } else {
+    let target = Number(params.get('c')) || Number(localStorage.getItem(LS.lastChannel)) || 0;
+    if (!state.channels.has(target)) target = 0;
+    if (!target) {
+      const member = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
+      target = member ? member.id : 0;
+    }
+    const jumpTo = Number(params.get('m')) || 0;
+    if (target) await openChannel(target, jumpTo ? { jumpTo } : {});
   }
-  const jumpTo = Number(params.get('m')) || 0;
-  if (target) await openChannel(target, jumpTo ? { jumpTo } : {});
   // After the first channel: the trail starts at a real entry, and the phone
   // trap needs a channel to name.
   wireBackButton();

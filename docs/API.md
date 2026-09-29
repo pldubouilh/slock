@@ -225,6 +225,19 @@ with `innerHTML` after verifying nothing else is present, or render it as text.
 Text-free searches (only filters) are allowed and return the latest messages
 matching the filters.
 
+## Latest
+
+| Method | Path | Query | Response |
+|---|---|---|---|
+| GET | `/api/latest` | `limit?` (default 50, max 100), `before?` (message id), `dms?`, `only?` | `200 {messages: [Message], has_more}` |
+
+Backs the client's "Latest" meta-channel: the newest messages across every channel and DM the caller is a **member** of, oldest first within the page (like channel history), paged backwards with `before`. Deleted messages and system notes are left out, and the allowlist and history cutoff apply as everywhere else.
+
+- `dms=0` leaves DMs out; by default they're included.
+- `only=1,2,3` restricts named channels to those ids (the client sends its pinned channels when "Pinned channels only" is on). DMs are governed by `dms` alone. An empty `only=` means no named channels.
+
+Latest is purely a view: it has no unread count, doesn't mark anything read, and triggers no notifications. Its two toggles are device-local (`localStorage`), like pinning.
+
 ## Realtime
 
 `GET /api/events` — Server-Sent Events. Each frame is

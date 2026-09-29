@@ -38,6 +38,16 @@
     </div>
 
     <div class="side-scroll">
+      <!-- the "Latest" meta-channel: newest messages from everywhere, read-only -->
+      <ul class="side-list side-list--meta">
+        <li id="latest-row" class="chan chan--member">
+          <button type="button" class="chan-btn">
+            <svg class="ic chan-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6h13M3.5 10h9M3.5 14h6"/><path d="m13.5 13 2 2 3-3.5"/></svg>
+            <span class="chan-name">Latest</span>
+          </button>
+        </li>
+      </ul>
+
       <section class="side-sec">
         <div class="side-sec-head">
           <h2>Channels</h2>
@@ -443,6 +453,31 @@
           <button type="submit" class="btn btn--primary mform-submit">Create channel</button>
         </footer>
       </form>
+    </section>
+  </div>
+</template>
+
+<template id="tpl-modal-latest">
+  <div class="modal-wrap">
+    <div class="modal-backdrop"></div>
+    <section class="modal" role="dialog" aria-modal="true" aria-label="Latest">
+      <header class="modal-head">
+        <h2 class="modal-title">Latest</h2>
+        <button type="button" class="iconbtn modal-close" aria-label="Close">
+          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
+        </button>
+      </header>
+      <div class="modal-body mform">
+        <p class="modal-note">The newest messages from every channel and conversation you're in. Click one to jump to it.</p>
+        <label class="check">
+          <input type="checkbox" name="faves_only">
+          <span>Pinned channels only</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="dms">
+          <span>Include direct messages</span>
+        </label>
+      </div>
     </section>
   </div>
 </template>
