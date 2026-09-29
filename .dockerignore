@@ -1,0 +1,18 @@
+# Keep the build context small and stable: anything here changing would
+# otherwise invalidate the `COPY . .` layer and force a rebuild.
+#
+# Only list files git ignores. .git must stay (the version is stamped from
+# it), and excluding a *tracked* file would make git see it as deleted, so
+# every image would report a "-dirty" version.
+
+# local build outputs
+/slock
+/slock-cli
+
+# local runtime data, logs, and the real config (may hold secrets)
+/data
+*.log
+slock.config
+
+# editor / agent state
+.claude
