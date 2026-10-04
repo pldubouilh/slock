@@ -2925,20 +2925,9 @@ function wireLightbox() {
     // Backdrop click closes; clicks on the image/caption/download do not.
     if (e.target === e.currentTarget || e.target.classList.contains('modal-backdrop')) closeLightbox();
   });
-  // Swipe left/right slides through the gallery (unless zoomed: then the
-  // finger is for panning).
-  let touch = null;
-  on(box, 'touchstart', (e) => {
-    touch = e.touches.length === 1 && !box.classList.contains('lightbox--zoomed')
-      ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
-  }, { passive: true });
-  on(box, 'touchend', (e) => {
-    if (!touch) return;
-    const dx = e.changedTouches[0].clientX - touch.x;
-    const dy = e.changedTouches[0].clientY - touch.y;
-    touch = null;
-    if (Math.abs(dx) > 48 && Math.abs(dx) > Math.abs(dy) * 1.5) lightboxStep(dx < 0 ? 1 : -1);
-  }, { passive: true });
+  // No swipe-to-change: the arrows (and arrow keys) do that, and a finger on
+  // the image is always just moving around it — pinch-zoom stays the
+  // browser's own.
 }
 
 /* ============================================================ realtime */
