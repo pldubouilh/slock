@@ -285,12 +285,26 @@ function mergeChannel(ch) {
   return state.channels.get(ch.id);
 }
 
-function setChannels(data) {
+// `startedAt` (when the list was requested) is given for refetches: a list
+// requested before one of our mark-reads was answered may predate it, and its
+// unread count for that channel would undo the read — keep ours instead (new
+// messages since arrive over SSE and count locally anyway).
+function setChannels(data, startedAt) {
   const seen = new Set();
+  let reopened = false;
   for (const ch of [...(data.channels || []), ...(data.dms || [])]) {
+    const prev = state.channels.get(ch.id);
+    if (prev && startedAt && readMayPostdate(ch.id, startedAt)) {
+      ch.unread_count = prev.unread_count || 0;
+    }
+    // A DM closed on this device that has unread messages got something new
+    // since (while this app wasn't running to see it live): bring it back,
+    // rather than count it in the title with nothing in the sidebar to click.
+    if (ch.kind === 'dm' && ch.unread_count > 0 && closedDMs.delete(ch.id)) reopened = true;
     mergeChannel(ch);
     seen.add(ch.id);
   }
+  if (reopened) saveClosedDMs();
   // Drop channels the server no longer reports (left private channels etc.),
   // except the one currently open.
   for (const id of [...state.channels.keys()]) {
@@ -343,14 +357,27 @@ function applyUserUpdate(user) {
 
 async function refetchChannels() {
   try {
+    const startedAt = Date.now();
     const data = await api('/api/channels', { toast: false });
-    setChannels(data);
+    setChannels(data, startedAt);
     renderSidebar();
     renderChannelHeader();
     updateBadges();
+    maybeMarkRead(); // reading the open channel now covers anything it brought
   } catch (err) {
     if (err.code !== 'network') console.warn('channel refetch failed', err);
   }
+}
+
+// Mark-read bookkeeping, so a channel list fetched around a read can't put
+// the read channel's old unread count back (see setChannels).
+const readInflight = new Map(); // channelId -> mark-read POSTs not yet answered
+const readDoneAt = new Map();   // channelId -> when the last one was answered
+
+// True when the server may have answered a channel list (requested at
+// `startedAt`) before taking our latest read of this channel into account.
+function readMayPostdate(channelId, startedAt) {
+  return (readInflight.get(channelId) || 0) > 0 || (readDoneAt.get(channelId) || 0) >= startedAt;
 }
 
 /* ============================================================ toasts */
@@ -1706,8 +1733,13 @@ function sendMarkRead(channelId) {
   }
   renderSidebar();
   updateBadges();
+  readInflight.set(channelId, (readInflight.get(channelId) || 0) + 1);
   api(`/api/channels/${channelId}/read`, { method: 'POST', body: { last_message_id: lastId }, toast: false })
-    .catch(() => state.lastReadSent.delete(channelId));
+    .catch(() => state.lastReadSent.delete(channelId))
+    .finally(() => {
+      readInflight.set(channelId, Math.max(0, (readInflight.get(channelId) || 1) - 1));
+      readDoneAt.set(channelId, Date.now());
+    });
 }
 
 // Commit any pending read immediately — used when leaving a channel so a quick
@@ -3128,6 +3160,11 @@ function connectSSE() {
     const ch = JSON.parse(e.data).channel;
     // An update never introduces a channel (channel.new / resync do that).
     if (!state.channels.has(ch.id)) return;
+    // The frame is built for whoever made the change: their unread count,
+    // membership and mute are theirs, not ours. Keep only the shared fields.
+    delete ch.unread_count;
+    delete ch.is_member;
+    delete ch.muted;
     mergeChannel(ch);
     renderSidebar();
     renderChannelHeader();
