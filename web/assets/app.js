@@ -3262,6 +3262,18 @@ function localPaletteEntries(q) {
       });
     }
   }
+  // Latest, findable by name like any channel ("#lat" too).
+  const latestScore = needle ? fuzzyScore(needle, 'Latest') : 0;
+  if (latestScore >= 0 && !biasPeople) {
+    entries.push({
+      kind: 'latest', id: 0, score: latestScore,
+      unread: false,
+      recency: '',
+      title: 'Latest',
+      sub: latestSubtitle(),
+      icon: '☰',
+    });
+  }
   if (!biasChannels) {
     // Notes, findable by name (you are otherwise left out of the people below).
     const notesScore = needle ? fuzzyScore(needle, 'Notes') : 0;
@@ -3490,6 +3502,8 @@ async function pickPaletteEntry(entry) {
     openDMWith(entry.id);
   } else if (entry.kind === 'notes') {
     openNotes();
+  } else if (entry.kind === 'latest') {
+    openLatest();
   }
 }
 
