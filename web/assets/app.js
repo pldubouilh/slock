@@ -214,6 +214,7 @@ const LS = {
   font: 'slock:font',
   lastChannel: 'slock:last-channel', // a channel id, or 'latest'
   drafts: 'slock:drafts',
+  outbox: 'slock:outbox',            // messages sent but not yet confirmed (see outbox)
   latestFaves: 'slock:latest-faves', // '1' = Latest shows pinned channels only
   latestDMs: 'slock:latest-dms',     // '0' = Latest leaves DMs out
 };
@@ -541,7 +542,7 @@ function makeMsgEl(m, prev, st) {
   if (author) author.textContent = userName(m.user_id);
   const time = el.querySelector('.msg-time');
   if (time) {
-    time.textContent = m.failed ? 'failed' : fmtTime(m.created_at);
+    time.textContent = m.failed ? 'not sent' : fmtTime(m.created_at);
     time.title = new Date(m.created_at).toLocaleString();
   }
   const edited = el.querySelector('.msg-edited');
@@ -590,11 +591,25 @@ function makeMsgEl(m, prev, st) {
   el.classList.toggle('msg--pinned', !!m.pinned);
 
   if (m.failed) {
+    // Kept on this device (the outbox) until it goes out or is discarded.
+    const row = document.createElement('div');
+    row.className = 'msg-failrow';
+    const note = document.createElement('span');
+    note.className = 'msg-failnote';
+    note.textContent = m.refused
+      ? `Not sent: ${m.error}`
+      : 'Not sent yet — it will go out when you’re back online';
     const retry = document.createElement('button');
     retry.type = 'button';
     retry.className = 'msg-retry';
-    retry.textContent = 'Send failed — retry';
-    (body ? body.parentElement : el).append(retry);
+    retry.textContent = m.refused ? 'Retry' : 'Retry now';
+    const discard = document.createElement('button');
+    discard.type = 'button';
+    discard.className = 'msg-discard';
+    discard.textContent = 'Discard';
+    discard.title = 'Remove it (the text goes back into an empty message box)';
+    row.append(note, retry, discard);
+    (body ? body.parentElement : el).append(row);
   }
   return el;
 }
@@ -1999,10 +2014,108 @@ async function submitComposer() {
   ta.value = '';
   autogrow();
   clearTray(done);
-  delete drafts[channelId]; // sent — the draft has served its purpose
+  outboxAdd(msg); // durable before the draft goes: there is always a copy on disk
+  delete drafts[channelId]; // the outbox holds it now
   persistDrafts();
 
   postMessage_(channelId, msg);
+}
+
+/* -------- outbox: sent messages the server hasn't confirmed yet.
+   localStorage `slock:outbox` holds each message from the moment it's sent
+   until the server confirms it (POST response or SSE echo). A reload, a
+   crash, or hours on a plane can't lose one: boot puts them back in their
+   channel as "not sent", and the next connection sends them. Sends are
+   idempotent on client_id, so resending one that did get through is harmless.
+   Every write is read-modify-write, so several tabs never clobber each other.
+   It is never sent anywhere but the normal send endpoint — no server-side
+   scratchpad. */
+
+function readOutbox() {
+  try {
+    const v = JSON.parse(localStorage.getItem(LS.outbox) || '[]');
+    return Array.isArray(v) ? v : [];
+  } catch { return []; }
+}
+
+function writeOutbox(list) {
+  try {
+    if (list.length) localStorage.setItem(LS.outbox, JSON.stringify(list));
+    else localStorage.removeItem(LS.outbox);
+  } catch { /* storage full or blocked: the in-memory copy still retries */ }
+}
+
+function outboxAdd(m) {
+  const list = readOutbox().filter((e) => e.client_id !== m.client_id);
+  list.push({
+    user_id: m.user_id, channel_id: m.channel_id, client_id: m.client_id,
+    body: m.body, attachments: m.attachments || [], created_at: m.created_at,
+  });
+  writeOutbox(list);
+}
+
+function outboxRemove(clientId) {
+  const list = readOutbox();
+  const next = list.filter((e) => e.client_id !== clientId);
+  if (next.length !== list.length) writeOutbox(next);
+}
+
+// Boot: put this user's unconfirmed messages back in their channels as "not
+// sent". The first SSE hello (a reconnect from nothing) then sends them.
+// Entries for a channel this user can no longer see stay on disk untouched.
+function restoreOutbox() {
+  if (!state.me) return;
+  for (const e of readOutbox()) {
+    if (!e || !e.client_id || e.user_id !== state.me.id || !state.channels.has(e.channel_id)) continue;
+    const st = chanState(e.channel_id);
+    if (st.byClient.has(e.client_id)) continue;
+    addMessageToState(e.channel_id, {
+      id: 0, channel_id: e.channel_id, user_id: e.user_id, body: e.body || '',
+      created_at: e.created_at || new Date().toISOString(), edited_at: null, deleted_at: null,
+      attachments: e.attachments || [], reactions: [], client_id: e.client_id,
+      failed: true,
+    });
+  }
+}
+
+// Drop an optimistic copy for good (discarded, or superseded by the server's).
+function dropLocalMsg(channelId, m) {
+  const st = chanState(channelId);
+  st.msgs = st.msgs.filter((x) => x !== m);
+  if (m.client_id) st.byClient.delete(m.client_id);
+  if (channelId === state.currentId) {
+    const el = findMsgEl(m);
+    if (el) el.remove();
+  }
+}
+
+// "Discard" on an unsent message. The words aren't thrown away: an empty
+// composer gets them back, so discarding is "take it back", not "lose it".
+function discardUnsent(channelId, clientId) {
+  const m = chanState(channelId).byClient.get(clientId);
+  if (!m || m.id) return;
+  outboxRemove(clientId);
+  dropLocalMsg(channelId, m);
+  const ta = byId('composer-input');
+  if (ta && channelId === state.currentId && !state.editingId && !ta.value.trim() && m.body) {
+    ta.value = m.body;
+    autogrow();
+    queueDraftSave();
+    ta.focus();
+  }
+}
+
+// While connected, a send that failed on a blip retries on its own every so
+// often, not just on the next reconnect (which may never come if the stream
+// stayed up).
+const OUTBOX_RETRY_MS = 20_000;
+let outboxRetryTimer = 0;
+function scheduleOutboxRetry() {
+  if (outboxRetryTimer) return;
+  outboxRetryTimer = setTimeout(() => {
+    outboxRetryTimer = 0;
+    if (state.connected) flushOutbox();
+  }, OUTBOX_RETRY_MS);
 }
 
 function postMessage_(channelId, msg) {
@@ -2025,8 +2138,15 @@ function postMessage_(channelId, msg) {
     if (msg.id) return;
     msg.failed = true;
     msg.pending = false;
+    // No network, or a server hiccup (5xx, a proxy's 502): it goes out by
+    // itself once things recover — no toast, the row says so. A refusal (4xx:
+    // no longer allowed there, too long…) won't fix itself; it waits for the
+    // user's Retry or Discard, and stays in the outbox until then.
+    msg.refused = err.code !== 'network' && err.status >= 400 && err.status < 500;
+    msg.error = msg.refused ? (err.message || 'The server refused it') : '';
     refreshMsgEl(channelId, msg);
-    toast(err.message || 'Message failed to send', true);
+    if (msg.refused) toast(`Message not sent: ${msg.error}`, true);
+    else scheduleOutboxRetry();
   });
 }
 
@@ -2035,18 +2155,20 @@ function retrySend(channelId, clientId) {
   const m = st.byClient.get(clientId);
   if (!m || m.id) return;
   m.failed = false;
+  m.refused = false;
   m.pending = true;
   refreshMsgEl(channelId, m);
   postMessage_(channelId, m);
 }
 
-// Re-send everything that failed to send while offline, across every channel,
-// oldest first. Called on reconnect. retrySend skips any that the SSE echo has
-// meanwhile reconciled (they have an id now), so this is safe to call anytime.
+// Re-send every unsent message across every channel, oldest first: on
+// reconnect, and periodically while connected. Refused ones wait for the
+// user. retrySend skips any that the SSE echo has meanwhile reconciled (they
+// have an id now), so this is safe to call anytime.
 function flushOutbox() {
   for (const [channelId, st] of state.chan) {
     for (const m of st.msgs.slice()) {
-      if (m.failed && !m.id && m.client_id) retrySend(channelId, m.client_id);
+      if (m.failed && !m.refused && !m.id && m.client_id) retrySend(channelId, m.client_id);
     }
   }
 }
@@ -2054,9 +2176,17 @@ function flushOutbox() {
 // Reconcile the optimistic copy with the server message (from the POST echo
 // or the message.new SSE frame — whichever lands first wins, the other no-ops).
 function reconcilePending(channelId, serverMsg) {
+  // Confirmed by the server: it no longer needs a copy on disk, whichever
+  // tab or path saw the confirmation first.
+  if (serverMsg.client_id) outboxRemove(serverMsg.client_id);
   const st = chanState(channelId);
-  if (serverMsg.id && st.byId.has(serverMsg.id)) return;
   const local = serverMsg.client_id && st.byClient.get(serverMsg.client_id);
+  if (serverMsg.id && st.byId.has(serverMsg.id)) {
+    // The server's copy is already showing (history loaded after a reload
+    // carries no client_id): the restored optimistic copy is a duplicate.
+    if (local && !local.id) dropLocalMsg(channelId, local);
+    return;
+  }
   if (!local) return;
   Object.assign(local, serverMsg, { pending: false, failed: false });
   st.byId.set(local.id, local);
@@ -5761,6 +5891,10 @@ function wireMessageList() {
       if (clientId) retrySend(state.currentId, clientId);
       return;
     }
+    if (e.target.closest('.msg-discard')) {
+      if (clientId) discardUnsent(state.currentId, clientId);
+      return;
+    }
     if (e.target.closest('.msg-more')) {
       const st = chanState(state.currentId);
       const m = (msgId && st.byId.get(msgId)) || (clientId && st.byClient.get(clientId));
@@ -6115,6 +6249,10 @@ function wireVisibility() {
       clearTimeout(offlineUITimer);
       offlineUITimer = 0;
       flushMarkRead(); // commit a read in flight before the tab is parked
+      // Phones kill a backgrounded app without a pagehide: this is the last
+      // reliable moment to put the half-typed message on disk.
+      saveDraftFor(state.currentId);
+      persistDrafts();
       return;
     }
     if (!state.connected) {
@@ -6337,11 +6475,14 @@ async function boot() {
     setChannels(chanData);
   } catch {
     toast('Could not load channels', true);
-    return;
+    return; // the outbox stays on disk for the next start
   }
 
   renderSidebar();
   updateBadges();
+  // Unconfirmed messages from earlier sessions go back in their channels; the
+  // first SSE hello sends them.
+  restoreOutbox();
 
   // Pick the channel to open: ?c= → last visited → first member channel → first.
   // "latest" (in ?c= or remembered) opens the Latest meta-channel instead.
