@@ -445,6 +445,7 @@ function renderSidebar() {
       li.classList.toggle('chan--member', !!ch.is_member);
       li.classList.toggle('chan--private', !!ch.is_private);
       li.classList.toggle('chan--pinned', isChannelPinned(ch.id));
+      li.classList.toggle('chan--draft', ch.id !== state.currentId && hasDraft(ch.id));
       const name = li.querySelector('.chan-name');
       if (name) name.textContent = ch.name;
       const badge = li.querySelector('.chan-badge');
@@ -468,6 +469,7 @@ function renderSidebar() {
       li.classList.toggle('dm--unread', ch.unread_count > 0 && !isMuted(ch));
       li.classList.toggle('dm--online', state.online.has(ch.peer_user_id));
       li.classList.toggle('dm--pinned', isChannelPinned(ch.id));
+      li.classList.toggle('dm--draft', ch.id !== state.currentId && hasDraft(ch.id));
       applyAvatar(li.querySelector('.dm-avatar'), peer);
       const name = li.querySelector('.dm-name');
       if (name) name.textContent = peer ? peer.display_name : 'Unknown';
@@ -482,7 +484,11 @@ function renderSidebar() {
     }
   }
   const notesRow = byId('notes-row');
-  if (notesRow) notesRow.classList.toggle('chan--active', isNotesChannel(state.channels.get(state.currentId)));
+  if (notesRow) {
+    const notes = notesChannel();
+    notesRow.classList.toggle('chan--active', isNotesChannel(state.channels.get(state.currentId)));
+    notesRow.classList.toggle('chan--draft', !!notes && notes.id !== state.currentId && hasDraft(notes.id));
+  }
   renderMeChip();
 }
 
@@ -1866,6 +1872,18 @@ function saveDraftFor(channelId) {
     if (state.editingId) d.edit_id = state.editingId;
     drafts[channelId] = d;
   }
+}
+
+// A channel has a draft: text typed and not sent, or an edit left open.
+function hasDraft(channelId) {
+  const d = channelId && drafts[channelId];
+  return !!(d && ((d.text || '').trim() || d.edit_id));
+}
+
+// The draft's opening words, on one line, for the palette.
+function draftSnippet(channelId) {
+  const text = ((drafts[channelId] && drafts[channelId].text) || '').replace(/\s+/g, ' ').trim();
+  return text.length > 60 ? text.slice(0, 60) + '…' : text;
 }
 
 const queueDraftSave = debounce(() => {
@@ -3468,11 +3486,19 @@ function localPaletteEntries(q) {
       });
     }
   }
-  // With no query, unread channels/DMs float to the top (muted ones don't).
-  // While typing, match quality stays in charge and unread only breaks ties.
+  // A conversation with a half-written message (not the open one: its text
+  // is right there) says so, and shows how it starts.
+  for (const e of entries) {
+    e.draft = (e.kind === 'channel' || e.kind === 'dm' || e.kind === 'notes')
+      && e.id !== state.currentId && hasDraft(e.id);
+    if (e.draft) e.sub = `✎ Draft: ${draftSnippet(e.id)}`;
+  }
+  // With no query, drafts come first (you were in the middle of something),
+  // then unread channels/DMs (muted ones don't count). While typing, match
+  // quality stays in charge and drafts, then unread, only break ties.
   entries.sort((a, b) => (needle
-    ? (b.score - a.score) || (b.unread - a.unread)
-    : (b.unread - a.unread) || (b.score - a.score))
+    ? (b.score - a.score) || (b.draft - a.draft) || (b.unread - a.unread)
+    : (b.draft - a.draft) || (b.unread - a.unread) || (b.score - a.score))
     || b.recency.localeCompare(a.recency));
   return entries.slice(0, needle ? 8 : 12);
 }

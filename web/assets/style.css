@@ -562,6 +562,11 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 .row-pin { display: none; flex-shrink: 0; color: var(--text-3); opacity: 0.7; }
 .chan--pinned .row-pin, .dm--pinned .row-pin { display: inline-flex; }
 
+/* pencil on a row with a typed-but-unsent message (JS toggles .chan--draft /
+   .dm--draft; never on the open conversation, whose text is in view) */
+.row-draft { display: none; flex-shrink: 0; color: var(--accent); }
+.chan--draft .row-draft, .dm--draft .row-draft { display: inline-flex; }
+
 /* row states the JS toggles */
 .chan--active .chan-btn, .dm--active .dm-btn {
   background: var(--accent-soft);
