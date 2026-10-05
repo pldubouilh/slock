@@ -1689,6 +1689,13 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
    lightbox — always dark, whatever the theme
    ========================================================================== */
 
+/* Pinch-zoom: only inside the image viewer. Everything else (the app, modals,
+   the palette…) allows panning but not pinching or double-tap zoom; the
+   viewer, a direct child of body, keeps the browser's normal gestures. This is
+   what stops it on iOS, which ignores the viewport meta's maximum-scale (see
+   setPageZoomable for the rest). */
+body > :not(#lightbox) { touch-action: pan-x pan-y; }
+
 #lightbox {
   position: fixed;
   inset: 0;
@@ -1764,10 +1771,13 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  color: #e9edf3;
+  /* same over-any-image treatment as the gallery arrows */
+  background: rgba(10, 13, 18, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  color: #fff;
 }
-#lightbox-close:hover { background: rgba(255, 255, 255, 0.16); }
+#lightbox-close:hover { background: rgba(10, 13, 18, 0.8); }
 
 /* gallery arrows, pinned to the sides */
 .lightbox-step {
@@ -1780,10 +1790,14 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   width: 44px;
   height: 44px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.08);
-  color: #e9edf3;
+  /* Readable over any image: a dark disc behind a light glyph, ringed and
+     shadowed so it also separates from a dark one. */
+  background: rgba(10, 13, 18, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  color: #fff;
 }
-.lightbox-step:hover { background: rgba(255, 255, 255, 0.16); }
+.lightbox-step:hover { background: rgba(10, 13, 18, 0.8); }
 #lightbox-prev { inset-inline-start: var(--sp-4); }
 #lightbox-next { inset-inline-end: var(--sp-4); }
 

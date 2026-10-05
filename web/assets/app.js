@@ -2908,6 +2908,24 @@ function openLightbox(img) {
   showLightboxAt(Math.max(0, lightboxItems.indexOf(img)));
 }
 
+// A phone (touch, no hover): the viewer shows the full-resolution original
+// straight away and pinch-zoom does the zooming; there is no tap-to-zoom.
+function isTouchDevice() {
+  return matchMedia('(hover: none) and (pointer: coarse)').matches;
+}
+
+// Pinch-zoom is off for the app (the viewport meta caps the scale at 1, and
+// CSS touch-action blocks the gesture on everything but the image viewer).
+// Opening an image lifts the cap; closing restores it, which also snaps any
+// zoom back to 1 — Chrome and Safari both re-apply a changed viewport meta.
+const VIEWPORT_NOZOOM = ', maximum-scale=1';
+function setPageZoomable(on) {
+  const meta = document.querySelector('meta[name=viewport]');
+  if (!meta) return;
+  const base = meta.content.replace(VIEWPORT_NOZOOM, '');
+  meta.content = on ? base : base + VIEWPORT_NOZOOM;
+}
+
 function showLightboxAt(i) {
   const box = byId('lightbox');
   const img = lightboxItems[i];
@@ -2916,8 +2934,11 @@ function showLightboxAt(i) {
   box.classList.remove('lightbox--zoomed');
   const el = byId('lightbox-img');
   if (el) {
-    // Fit view uses the fast display variant; zooming swaps in the original.
-    el.src = img.dataset.display || img.src;
+    // Desktop: the fit view uses the fast display variant, and click-to-zoom
+    // swaps in the original. Phones get the original right away.
+    el.src = isTouchDevice()
+      ? (img.dataset.original || img.src)
+      : (img.dataset.display || img.src);
     el.alt = img.dataset.filename || '';
     el.dataset.original = img.dataset.original || img.src;
   }
@@ -2931,6 +2952,7 @@ function showLightboxAt(i) {
   setHidden(byId('lightbox-prev'), i <= 0);
   setHidden(byId('lightbox-next'), i >= lightboxItems.length - 1);
   box.hidden = false;
+  setPageZoomable(true);
 }
 
 function lightboxStep(delta) {
@@ -2944,6 +2966,7 @@ function closeLightbox() {
   if (box && !box.hidden) {
     box.hidden = true;
     box.classList.remove('lightbox--zoomed');
+    setPageZoomable(false); // back to normal size, and no zooming the app
     const el = byId('lightbox-img');
     if (el) el.removeAttribute('src');
     lightboxItems = [];
@@ -2963,7 +2986,7 @@ function wireLightbox() {
   // variant for the untouched original; the browser keeps showing the old
   // frame until the sharper one arrives.
   on(byId('lightbox-img'), 'click', () => {
-    if (!box) return;
+    if (!box || isTouchDevice()) return; // phones: already the original; pinch to zoom
     const el = byId('lightbox-img');
     if (!box.classList.contains('lightbox--zoomed') && el
       && el.dataset.original && el.getAttribute('src') !== el.dataset.original) {
@@ -3007,7 +3030,17 @@ function scheduleReloadForUpdate() {
   saveDraftFor(state.currentId);
   persistDrafts();
   toast('Updating to the latest version…');
-  setTimeout(() => location.reload(), 1000);
+  setTimeout(() => {
+    // Hand the reload a page as a fresh load would find it. Phones carry the
+    // pinch-zoom level and the document's scroll offset across a reload, and
+    // a keyboard open at that moment leaves the page pushed up: together that
+    // came back as a zoomed-in app with its bottom cut off.
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    closeLightbox();
+    setPageZoomable(false);
+    window.scrollTo(0, 0);
+    setTimeout(() => location.reload(), 150); // let the keyboard and zoom settle
+  }, 1000);
 }
 
 // Whether the server is currently out of reach. navigator.onLine is the
@@ -6403,6 +6436,10 @@ function wireSwipe() {
     gesture = null;
     if (!mq.matches || e.touches.length !== 1) return;
     if (document.body.classList.contains('modal-open') || pal.open) return;
+    // The image viewer owns every touch: a drag there pans the image, it must
+    // never pull the channel list open underneath.
+    const lightbox = byId('lightbox');
+    if (lightbox && !lightbox.hidden) return;
     const t = e.touches[0];
     const open = document.body.classList.contains('nav-open');
     let mode = null;
@@ -6465,6 +6502,11 @@ function wireSwipe() {
 /* ============================================================ boot */
 
 async function boot() {
+  // The app lays itself out to the viewport and never scrolls the document;
+  // a scroll offset restored by a reload (an update, a refresh with the
+  // keyboard up) would just crop it.
+  if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+  window.scrollTo(0, 0);
   applyTheme(localStorage.getItem(LS.theme) || 'system');
   applySide(localStorage.getItem(LS.side) === 'right' ? 'right' : 'left');
   applyDensity(localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy');
