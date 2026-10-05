@@ -1190,11 +1190,36 @@ async function gapFill(channelId) {
       appendMsgToDom(channelId, m, prev);
       lastId = m.id;
     }
-    if (!data.has_more || !data.messages.length) break;
+    if (!data.has_more || !data.messages.length) {
+      st.stale = false;
+      break;
+    }
     lastId = data.messages[data.messages.length - 1].id;
+    if (round === 2) {
+      // Too far behind to stitch: start the channel over from its newest
+      // page, so nothing in the middle is silently missing (and a read covers
+      // the real newest message).
+      try { await loadHistory(channelId); } catch { return; }
+      if (channelId === state.currentId) renderMessagesFull(channelId);
+    }
   }
   if (channelId === state.currentId && state.atBottom) scrollToBottom();
   maybeMarkRead();
+}
+
+// Whether the server knows of a message newer than any we hold for this
+// channel: its last_message_at (from the channel list) is past our newest
+// message's time. Messages can be missed without a reconnect ever showing —
+// a stream that died silently while the machine slept — and reading a
+// channel that is behind would mark read only up to what we hold, leaving the
+// rest unread on the server (and back in the title on the next refresh).
+function behindServer(ch, st) {
+  if (!ch || !ch.last_message_at) return false;
+  for (let i = st.msgs.length - 1; i >= 0; i--) {
+    const m = st.msgs[i];
+    if (m.id) return new Date(ch.last_message_at) > new Date(m.created_at);
+  }
+  return true; // nothing real held, yet the server has messages
 }
 
 // Every entry we create carries the channel it stands for, so popstate can
@@ -1261,7 +1286,9 @@ async function openChannel(channelId, opts = {}) {
     } finally {
       if (loader) loader.hidden = true;
     }
-  } else if (st.stale) {
+  } else if (st.stale || ch.unread_count > 0 || behindServer(ch, st)) {
+    // Catch up before showing (and marking read): unread messages we may not
+    // hold, or newer ones the server has that we missed.
     await gapFill(channelId);
   }
   if (state.currentId !== channelId) return; // user moved on mid-load
@@ -6346,6 +6373,13 @@ function wireVisibility() {
       setOffline(true); // grace restarts now, with the user watching
       connectSSE();
     } else {
+      // Coming back to a tab whose stream looks alive: it may have died
+      // silently while hidden (sleep, a parked phone app), dropping messages
+      // for any channel. Treat it like a reconnect: every other loaded
+      // channel catches up when next opened.
+      for (const [id, st] of state.chan) {
+        if (st.loaded && id !== state.currentId) st.stale = true;
+      }
       refetchChannels();
       if (state.currentId) gapFill(state.currentId);
     }
