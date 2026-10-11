@@ -170,6 +170,8 @@ attachments and reactions in the same batch.
 - `limit` defaults to 50, max 200. Messages come back **oldest → newest**.
 - `before=<id>` returns messages older than that id (scroll-back);
   `after=<id>` returns newer ones (gap-fill after reconnect).
+- `around=<id>` returns a window centred on that message: up to `limit/2` at or before it and up to `limit/2` after, oldest first, with `has_more` (older exist) and `has_more_after` (newer exist). The client uses it to jump to a far-back message (search, links, Latest) without paging through everything in between, then pages with `before`/`after` as you scroll. The service worker never caches `before`, `after` or `around` responses; only a channel's newest page is kept for offline reading.
+- The web client keeps a bounded window in the page: back at the bottom (after the scroll settles), and when (re)opening a channel, it trims to the newest 150 messages; scrolling up re-fetches the rest.
 - A message needs a non-empty `body` **or** at least one attachment.
 - `client_id` is an idempotency key: `(user_id, client_id)` is unique, so a
   retried POST (a browser re-sending over a flaky connection, or a manual

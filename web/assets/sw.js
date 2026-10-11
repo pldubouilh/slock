@@ -80,10 +80,13 @@ function offlineReadable(url) {
       return true;
   }
   // A channel's newest page, which is what openChannel asks for. Paging
-  // through older history stays online-only: those pages are meaningless
-  // without the live list they hang off.
+  // through older/newer history, and windows around a jumped-to message,
+  // stay online-only: they are meaningless without the live list they hang
+  // off — and since lookups ignore the query string, storing one would let it
+  // be served offline as the channel's newest page.
   if (/^\/api\/channels\/\d+\/messages$/.test(url.pathname)) {
-    return !url.searchParams.has('before') && !url.searchParams.has('after');
+    return !url.searchParams.has('before') && !url.searchParams.has('after')
+      && !url.searchParams.has('around');
   }
   return false;
 }

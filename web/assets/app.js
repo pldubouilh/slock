@@ -227,6 +227,11 @@ function chanState(id) {
       loaded: false, loadingOlder: false, hasMore: true,
       olderRetryAt: 0, // don't re-ask for history before this (see loadOlder)
       stale: false, unreadStartId: null, jumpCount: 0,
+      // Detached: showing a window around a jumped-to message rather than the
+      // live end. Newer messages exist past the window and load on scrolling
+      // down; live ones aren't appended (there'd be a gap). See loadAround.
+      hasNewer: false, newerRetryAt: 0, loadingNewer: false,
+      parked: [], // unsent messages held aside while detached (they belong at the live end)
     };
     state.chan.set(id, st);
   }
@@ -814,7 +819,9 @@ function updateJumpLatest() {
   if (!btn) return;
   const st = state.currentId ? chanState(state.currentId) : null;
   const n = st ? st.jumpCount : 0;
-  const show = !state.atBottom && state.currentId != null;
+  // A detached window (after a far jump) always offers the way back, even
+  // scrolled to its own end — the present is further on.
+  const show = state.currentId != null && (!state.atBottom || st.hasNewer);
   btn.hidden = !show;
   if (show) btn.textContent = n > 0 ? `${n} new message${n === 1 ? '' : 's'} ↓` : 'Jump to latest ↓';
 }
@@ -1071,7 +1078,9 @@ async function loadHistory(channelId) {
   // Messages typed while offline have no server id yet — carry them over so a
   // (re)load never drops something the user is still trying to send. They belong
   // at the tail: they're the most recent thing in the channel.
-  const outbox = st.msgs.filter((m) => !m.id && m.client_id);
+  // Unsent messages parked while the view was detached (loadAround) come back
+  // too — this is the live end again.
+  const outbox = st.msgs.filter((m) => !m.id && m.client_id).concat(st.parked);
   st.msgs = [];
   st.byId = new Map();
   st.byClient = new Map();
@@ -1082,7 +1091,133 @@ async function loadHistory(channelId) {
   st.loaded = true;
   st.stale = false;
   st.hasMore = !!data.has_more;
+  st.hasNewer = false;
+  st.parked = [];
   st.jumpCount = 0;
+}
+
+/* -------- a bounded message window.
+   A long session must not keep every message it ever scrolled past in the
+   page: layout and style work scale with it (a long channel's trace showed
+   ~5,400 layout objects behind every keystroke). So:
+   - back at the bottom, the list is trimmed to its newest KEEP_MSGS (the rest
+     re-fetches if you scroll up again);
+   - jumping to a message that isn't loaded fetches only a window around it
+     (?around=), "detached" from the live end: older and newer pages load as
+     you scroll, and reaching the newest page re-attaches it. */
+
+const KEEP_MSGS = 150;
+const AROUND_PAGE = 100;
+
+// Drop all but the newest KEEP_MSGS real messages (unsent ones stay: they are
+// the tail). Not while detached — the window is already bounded by paging.
+// Returns whether anything was dropped; `render` redraws the open channel.
+function trimOldMessages(channelId, render) {
+  const st = chanState(channelId);
+  if (!st.loaded || st.hasNewer) return false;
+  let real = 0;
+  let cut = -1;
+  for (let i = st.msgs.length - 1; i >= 0; i--) {
+    if (st.msgs[i].id && ++real > KEEP_MSGS) { cut = i; break; }
+  }
+  if (cut < 0) return false;
+  for (const m of st.msgs.slice(0, cut + 1)) {
+    st.byId.delete(m.id);
+    if (m.client_id) st.byClient.delete(m.client_id);
+  }
+  st.msgs = st.msgs.slice(cut + 1);
+  st.hasMore = true; // they're still on the server
+  st.olderRetryAt = 0;
+  if (render && channelId === state.currentId) {
+    renderMessagesFull(channelId);
+    scrollToBottom();
+  }
+  return true;
+}
+
+// Replace a channel's window with the messages around one message: the jump
+// to something far back. Unsent messages are parked (they belong at the live
+// end) unless the window turns out to reach it.
+async function loadAround(channelId, msgId) {
+  const st = chanState(channelId);
+  const data = await api(`/api/channels/${channelId}/messages?around=${msgId}&limit=${AROUND_PAGE}`);
+  st.parked = st.parked.concat(st.msgs.filter((m) => !m.id && m.client_id));
+  st.msgs = [];
+  st.byId = new Map();
+  st.byClient = new Map();
+  for (const m of data.messages) addMessageToState(channelId, m);
+  for (const m of st.parked) st.byClient.set(m.client_id, m); // still retry and reconcile
+  st.loaded = true;
+  st.stale = false;
+  st.hasMore = !!data.has_more;
+  st.hasNewer = !!data.has_more_after;
+  st.olderRetryAt = 0;
+  st.newerRetryAt = 0;
+  st.jumpCount = 0;
+  if (!st.hasNewer) attachParked(channelId);
+}
+
+// The window reached the live end: unsent messages go back on the tail.
+function attachParked(channelId) {
+  const st = chanState(channelId);
+  const parked = st.parked;
+  st.parked = [];
+  for (const m of parked) {
+    if (m.id || st.msgs.includes(m)) continue;
+    const prev = st.msgs[st.msgs.length - 1] || null;
+    st.msgs.push(m);
+    st.byClient.set(m.client_id, m);
+    appendMsgToDom(channelId, m, prev);
+  }
+}
+
+// Detached window: scrolling down loads the next newer page; the last one
+// re-attaches the channel to the live end.
+async function loadNewer(channelId) {
+  const st = chanState(channelId);
+  if (!st.loaded || !st.hasNewer || st.loadingNewer) return false;
+  if (st.newerRetryAt && Date.now() < st.newerRetryAt) return false;
+  const newest = newestRealId(st);
+  if (!newest) return false;
+  st.loadingNewer = true;
+  try {
+    const data = await api(`/api/channels/${channelId}/messages?after=${newest}&limit=${OLDER_PAGE}`, { toast: false });
+    if (!st.hasNewer) return false; // returned to the present meanwhile
+    for (const m of data.messages) {
+      if (st.byId.has(m.id)) continue;
+      const prev = st.msgs[st.msgs.length - 1] || null;
+      addMessageToState(channelId, m);
+      appendMsgToDom(channelId, m, prev);
+    }
+    st.newerRetryAt = 0;
+    if (!data.has_more) {
+      st.hasNewer = false;
+      attachParked(channelId);
+      updateJumpLatest();
+      maybeMarkRead(); // now it's the real end
+    }
+    return data.messages.length > 0;
+  } catch {
+    st.newerRetryAt = Date.now() + OLDER_RETRY_MS;
+    return false;
+  } finally {
+    st.loadingNewer = false;
+  }
+}
+
+// Leave a detached window for the live end (Jump to latest, sending).
+async function returnToLatest(channelId) {
+  const st = chanState(channelId);
+  try { await loadHistory(channelId); } catch { return false; }
+  if (channelId === state.currentId) {
+    placeUnreadDivider(channelId);
+    renderMessagesFull(channelId);
+    state.atBottom = true;
+    scrollToBottom();
+    updateJumpLatest();
+    maybeMarkRead();
+  }
+  return !st.hasNewer;
 }
 
 // Position the "new messages" divider for the current visit from the live
@@ -1092,7 +1227,8 @@ function placeUnreadDivider(channelId) {
   const st = chanState(channelId);
   const ch = state.channels.get(channelId);
   st.unreadStartId = null;
-  if (ch && ch.unread_count > 0 && st.msgs.length) {
+  // Counted back from the live end — meaningless in a detached window.
+  if (ch && ch.unread_count > 0 && st.msgs.length && !st.hasNewer) {
     const idx = Math.max(0, st.msgs.length - ch.unread_count);
     st.unreadStartId = st.msgs[idx].id;
   }
@@ -1169,7 +1305,9 @@ function prependToDom(channelId, msgs) {
 
 async function gapFill(channelId) {
   const st = chanState(channelId);
-  if (!st.loaded) return;
+  // A detached window has a deliberate hole up to the present; it fills by
+  // scrolling down (loadNewer), not by stitching on from its newest message.
+  if (!st.loaded || st.hasNewer) return;
   let lastId = newestRealId(st);
   if (!lastId) return;
   for (let round = 0; round < 3; round++) {
@@ -1266,7 +1404,9 @@ async function openChannel(channelId, opts = {}) {
   renderChannelHeader();
 
   const st = chanState(channelId);
-  if (!st.loaded) {
+  // Not loaded, or a detached window opened plainly (not to jump somewhere):
+  // load the live end.
+  if (!st.loaded || (st.hasNewer && !opts.jumpTo)) {
     const loader = byId('message-loader');
     if (loader) loader.hidden = false;
     try {
@@ -1292,6 +1432,9 @@ async function openChannel(channelId, opts = {}) {
     await gapFill(channelId);
   }
   if (state.currentId !== channelId) return; // user moved on mid-load
+  // Opening at the bottom: whatever piled up from scrolling back last time
+  // goes, before it's drawn.
+  if (!opts.jumpTo) trimOldMessages(channelId, false);
 
   st.jumpCount = 0;
   placeUnreadDivider(channelId); // fresh each visit, not a stale leftover
@@ -1313,9 +1456,18 @@ async function openChannel(channelId, opts = {}) {
 
 async function jumpToMessage(channelId, msgId) {
   const st = chanState(channelId);
-  for (let i = 0; i < 6 && !st.byId.has(msgId) && st.hasMore; i++) {
-    const got = await loadOlder(channelId);
-    if (!got) break;
+  if (!st.byId.has(msgId)) {
+    // Not in the loaded window: fetch just its surroundings instead of paging
+    // back through everything in between.
+    try {
+      await loadAround(channelId, msgId);
+    } catch {
+      scrollToBottom();
+      return;
+    }
+    if (state.currentId !== channelId) return;
+    placeUnreadDivider(channelId);
+    renderMessagesFull(channelId);
   }
   const el = byId('message-list')
     && byId('message-list').querySelector(`.msg[data-id="${msgId}"]`);
@@ -1582,6 +1734,18 @@ function prependLatest(msgs) {
   sc.scrollTop += sc.scrollHeight - before;
 }
 
+// Back at the bottom of Latest after scrolling far up: keep only the newest
+// KEEP_MSGS rows, like a channel (older ones re-fetch on scrolling up).
+function trimLatest() {
+  if (!state.latest || latest.msgs.length <= KEEP_MSGS) return;
+  for (const m of latest.msgs.slice(0, latest.msgs.length - KEEP_MSGS)) latest.byId.delete(m.id);
+  latest.msgs = latest.msgs.slice(-KEEP_MSGS);
+  latest.hasMore = true;
+  latest.retryAt = 0;
+  renderLatestFull();
+  scrollToBottom();
+}
+
 // A live message.new while the feed is showing.
 function appendLatest(m) {
   const list = byId('message-list');
@@ -1732,8 +1896,10 @@ function renderChannelHeader() {
 /* ============================================================ read state / badges */
 
 function newestVisible() {
-  // "newest message is visible" ≈ scrolled to (near) the bottom.
-  return state.atBottom;
+  // "newest message is visible" ≈ scrolled to (near) the bottom — of the live
+  // end: the bottom of a detached window (after a far jump) is not it.
+  const st = state.currentId ? chanState(state.currentId) : null;
+  return state.atBottom && !(st && st.hasNewer);
 }
 
 // Marking read is debounced (so scrolling does not spam the endpoint), but the
@@ -2088,6 +2254,17 @@ async function submitComposer() {
   const attachmentIds = done.map((t) => t.attachment.id);
   if (!body && !attachmentIds.length) return;
 
+  // Sending from a detached window (after a far jump): the message belongs at
+  // the live end, so go there first. Offline that can fail — then nothing is
+  // sent and the text stays in the box.
+  if (chanState(state.currentId).hasNewer) {
+    const back = await returnToLatest(state.currentId);
+    if (!back) {
+      toast('Can\u2019t reach the latest messages right now — your message is still in the box', true);
+      return;
+    }
+  }
+
   const channelId = state.currentId;
   const st = chanState(channelId);
   const clientId = sendId();
@@ -2258,7 +2435,7 @@ function retrySend(channelId, clientId) {
 // have an id now), so this is safe to call anytime.
 function flushOutbox() {
   for (const [channelId, st] of state.chan) {
-    for (const m of st.msgs.slice()) {
+    for (const m of st.msgs.concat(st.parked)) {
       if (m.failed && !m.refused && !m.id && m.client_id) retrySend(channelId, m.client_id);
     }
   }
@@ -2272,6 +2449,13 @@ function reconcilePending(channelId, serverMsg) {
   if (serverMsg.client_id) outboxRemove(serverMsg.client_id);
   const st = chanState(channelId);
   const local = serverMsg.client_id && st.byClient.get(serverMsg.client_id);
+  if (local && st.parked.includes(local)) {
+    // Parked while the view is detached: it's sent now. Let it go; the real
+    // message shows up with the newer pages like any other.
+    st.parked = st.parked.filter((x) => x !== local);
+    st.byClient.delete(local.client_id);
+    return;
+  }
   if (serverMsg.id && st.byId.has(serverMsg.id)) {
     // The server's copy is already showing (history loaded after a reload
     // carries no client_id): the restored optimistic copy is a duplicate.
@@ -3371,7 +3555,9 @@ function onMessageNew(data) {
   }
   if (m.id && st.byId.has(m.id)) return;
 
-  if (st.loaded) {
+  // A detached window (after a far jump) ends before the present: appending
+  // would leave a hole. It arrives with the newer pages as you scroll down.
+  if (st.loaded && !st.hasNewer) {
     const prev = st.msgs[st.msgs.length - 1] || null;
     addMessageToState(channelId, m);
     if (channelId === state.currentId) {
@@ -3386,7 +3572,7 @@ function onMessageNew(data) {
   }
 
   const isOwn = state.me && m.user_id === state.me.id;
-  const visibleHere = channelId === state.currentId && state.atBottom
+  const visibleHere = channelId === state.currentId && state.atBottom && !st.hasNewer
     && !document.hidden && document.hasFocus();
   // System notes are ambient: they render in the channel but never bump unread,
   // sound, or the read marker's "someone said something" semantics.
@@ -5921,7 +6107,26 @@ function wireMessageList() {
         if (state.currentId) loadOlder(state.currentId);
         else if (state.latest) loadOlderLatest();
       }
+      // A detached window (after a far jump) grows downwards as you near its
+      // end, until it meets the present.
+      if (state.currentId && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 240
+        && chanState(state.currentId).hasNewer) {
+        loadNewer(state.currentId);
+      }
+      scheduleTrim();
     }, { passive: true });
+    // Back at the bottom and settled: drop what scrolling back piled up, so
+    // the page never keeps more than a bounded window (see trimOldMessages).
+    // Waits for the scroll to stop: removing rows mid-fling would jank it.
+    let trimTimer = 0;
+    const scheduleTrim = () => {
+      clearTimeout(trimTimer);
+      trimTimer = setTimeout(() => {
+        if (sc.scrollHeight - sc.scrollTop - sc.clientHeight >= 48) return;
+        if (state.currentId) trimOldMessages(state.currentId, true);
+        else if (state.latest) trimLatest();
+      }, 800);
+    };
     // Re-arm hover only on real pointer movement. Chrome re-dispatches a
     // synthetic mousemove at the old coordinates after a scroll to refresh
     // hover targets; a same-position event must not count as movement.
@@ -5932,8 +6137,8 @@ function wireMessageList() {
       lastMY = e.clientY;
       sc.classList.remove('is-scrolling');
     });
-    // On touch there is no hover to re-arm, but a deliberate tap must land on
-    // a live row (the class turns off pointer events for the whole list).
+    // On touch there is no hover to re-arm; clear the class anyway so a tap
+    // never finds a toolbar still forced hidden.
     sc.addEventListener('touchstart', () => sc.classList.remove('is-scrolling'), { passive: true });
   }
   if (!list) return;
@@ -6175,6 +6380,11 @@ function wireHeader() {
   on(byId('close-dm-btn'), 'click', closeDMConversation);
   on(byId('info-btn'), 'click', openChannelInfoModal);
   on(byId('jump-latest'), 'click', () => {
+    // Detached after a far jump: "latest" is a reload of the live end.
+    if (state.currentId && chanState(state.currentId).hasNewer) {
+      returnToLatest(state.currentId);
+      return;
+    }
     state.atBottom = true;
     if (state.currentId) chanState(state.currentId).jumpCount = 0;
     scrollToBottom();

@@ -906,11 +906,19 @@ body.view-latest #typing-indicator { display: none; }
 }
 
 /* Desktop only: while the list is moving, don't let the row under a stationary
-   cursor pop its toolbar. Never applied on touch — there it blocked the
-   touchstart that arms a long-press, so the first press after a scroll was
-   eaten. */
+   cursor pop its toolbar. Only the toolbars are touched: this used to switch
+   pointer-events on the whole #message-list, an inherited property, so every
+   scroll start (and the next mouse move) restyled every element in the list —
+   1,586 of them, 20–40 ms each time, in a long channel's trace. Here only the
+   toolbars are rechecked, and their insides only if a value actually changes
+   (a hidden toolbar already has pointer-events: none). The ID keeps it above
+   `.msg:hover .msg-actions`. A toolbar holding an open emoji picker stays. */
 @media (hover: hover) and (pointer: fine) {
-  #message-scroll.is-scrolling #message-list { pointer-events: none; }
+  #message-scroll.is-scrolling .msg-actions:not(:has(.emoji-picker)) {
+    opacity: 0;
+    pointer-events: none;
+    transition: none;
+  }
 }
 .msg:focus-visible { outline: none; }
 

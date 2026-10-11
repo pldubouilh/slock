@@ -202,6 +202,11 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) erro
 	limit := httpx.Clamp(httpx.QueryInt(r, "limit", 50), 1, 200)
 	before := int64(httpx.QueryInt(r, "before", 0))
 	after := int64(httpx.QueryInt(r, "after", 0))
+	around := int64(httpx.QueryInt(r, "around", 0))
+
+	if around > 0 {
+		return s.listMessagesAround(w, r, id, around, limit)
+	}
 
 	// Fetch one extra row to know whether another page exists. The cutoff
 	// clause enforces per-user limited history (users.history_cutoff): NULL —
@@ -229,37 +234,89 @@ func (s *Server) handleListMessages(w http.ResponseWriter, r *http.Request) erro
 		args = []any{id, limit + 1, me.HistoryCutoff}
 	}
 
-	rows, err := s.DB.Pool.Query(ctx, sql, args...)
+	msgs, err := s.queryMessages(ctx, sql, args...)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-	msgs := []db.Message{}
-	for rows.Next() {
-		m, err := scanMessage(rows)
-		if err != nil {
-			return err
-		}
-		msgs = append(msgs, m)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
 	hasMore := len(msgs) > limit
 	if hasMore {
 		msgs = msgs[:limit]
 	}
 	if !ascOrder {
-		for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
-			msgs[i], msgs[j] = msgs[j], msgs[i]
-		}
+		reverseMessages(msgs)
 	}
 	if err := s.hydrate(ctx, msgs, me.ID); err != nil {
 		return err
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"messages": msgs, "has_more": hasMore})
 	return nil
+}
+
+// listMessagesAround answers ?around=<id>: a window centred on one message, so
+// jumping to something far back (a search hit, a link) loads only its
+// surroundings instead of every page in between. Up to limit/2 messages at or
+// before the id and up to limit/2 after it, oldest first; has_more says older
+// ones exist, has_more_after newer ones. The client then pages either way.
+func (s *Server) listMessagesAround(w http.ResponseWriter, r *http.Request, channelID, around int64, limit int) error {
+	me := currentUser(r)
+	ctx := r.Context()
+	half := max(limit/2, 1)
+	const cutoff = ` AND ($4::timestamptz IS NULL OR m.created_at >= $4)`
+
+	older, err := s.queryMessages(ctx, `SELECT `+messageCols+` FROM messages m
+	        WHERE m.channel_id = $1 AND m.id <= $2`+cutoff+` ORDER BY m.id DESC LIMIT $3`,
+		channelID, around, half+1, me.HistoryCutoff)
+	if err != nil {
+		return err
+	}
+	newer, err := s.queryMessages(ctx, `SELECT `+messageCols+` FROM messages m
+	        WHERE m.channel_id = $1 AND m.id > $2`+cutoff+` ORDER BY m.id ASC LIMIT $3`,
+		channelID, around, half+1, me.HistoryCutoff)
+	if err != nil {
+		return err
+	}
+
+	hasMore := len(older) > half
+	if hasMore {
+		older = older[:half]
+	}
+	hasMoreAfter := len(newer) > half
+	if hasMoreAfter {
+		newer = newer[:half]
+	}
+	reverseMessages(older)
+	msgs := append(older, newer...)
+	if err := s.hydrate(ctx, msgs, me.ID); err != nil {
+		return err
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{
+		"messages": msgs, "has_more": hasMore, "has_more_after": hasMoreAfter,
+	})
+	return nil
+}
+
+// queryMessages runs a SELECT of messageCols and scans every row.
+func (s *Server) queryMessages(ctx context.Context, sql string, args ...any) ([]db.Message, error) {
+	rows, err := s.DB.Pool.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	msgs := []db.Message{}
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, m)
+	}
+	return msgs, rows.Err()
+}
+
+func reverseMessages(msgs []db.Message) {
+	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
+		msgs[i], msgs[j] = msgs[j], msgs[i]
+	}
 }
 
 // handleCreateMessage inserts a message, attaches any uploaded attachment ids
