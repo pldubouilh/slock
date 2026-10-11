@@ -790,6 +790,13 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* A sealed layout box: its size comes only from the column (flex: 1), never
+     from its content, and nothing inside affects anything outside. Without
+     it, every height change of the composer (each new line typed) re-laid out
+     the whole message tree — thousands of objects in a long channel, ~22 ms a
+     time in a trace. It already clipped its content (a scroller), and nothing
+     inside is position: fixed, so the containment changes nothing visible. */
+  contain: strict;
 }
 
 #message-list { padding: var(--sp-2) 0 var(--sp-1); }
@@ -1411,6 +1418,10 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   outline: none;
   line-height: 1.42;
   color: var(--text-1);
+  /* The browser grows the box with its text (up to max-height, then it
+     scrolls) — no per-keystroke measuring in JS. Browsers without it fall back
+     to autogrow() in app.js. */
+  field-sizing: content;
 }
 #composer-input::placeholder { color: var(--text-3); }
 

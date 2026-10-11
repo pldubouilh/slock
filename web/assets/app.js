@@ -1855,9 +1855,23 @@ function dismissKeyboard() {
   if (ta && document.activeElement === ta) ta.blur();
 }
 
+// Where the browser can size a textarea to its content by itself (CSS
+// `field-sizing: content`, see #composer-input), autogrow has nothing to do.
+// Elsewhere it measures — and the measuring is the expensive part: collapsing
+// the box to `auto` and reading its height forces a synchronous layout of the
+// whole main column, message list included. So that only happens when the box
+// might have to shrink (text got shorter) or has outgrown its height; plain
+// typing within the current lines costs a cheap read.
+const FIELD_SIZING = typeof CSS !== 'undefined' && !!CSS.supports && CSS.supports('field-sizing', 'content');
+let autogrowLen = 0;
+
 function autogrow() {
+  if (FIELD_SIZING) return;
   const ta = byId('composer-input');
   if (!ta) return;
+  const grew = ta.value.length >= autogrowLen;
+  autogrowLen = ta.value.length;
+  if (grew && ta.style.height && ta.scrollHeight <= ta.clientHeight) return; // still fits
   ta.style.height = 'auto';
   const max = Math.floor(innerHeight * 0.4);
   ta.style.height = Math.min(ta.scrollHeight, max) + 'px';
