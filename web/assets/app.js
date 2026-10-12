@@ -691,6 +691,16 @@ function renderFoldedBody(bodyEl, m) {
   bodyEl.after(more);
 }
 
+// Give an attachment <img> its box up front: its aspect ratio, and its natural
+// width as a cap (small images are never upscaled). The CSS keeps the existing
+// limits on top (420px wide, 340px tall, the column's width).
+function sizeImageBox(img, w, h) {
+  img.classList.add('att-img-el--sized');
+  img.style.setProperty('--att-w', `${w}px`);
+  img.style.setProperty('--att-ar', `${w} / ${h}`);
+  img.style.setProperty('--att-r', String(w / h));
+}
+
 function makeAttachmentEl(att) {
   if (att.is_image) {
     const el = tpl('tpl-attachment-image');
@@ -704,7 +714,18 @@ function makeAttachmentEl(att) {
       img.dataset.display = fileURL(att, att.has_display ? 'display' : 'original');
       img.dataset.original = fileURL(att, 'original');
       img.dataset.filename = att.filename;
+      // Reserve the image's box before it loads (lazily, as it scrolls into
+      // view): without a size it starts at zero height and every image that
+      // arrives pushes the rows below it down — content shifting under the
+      // reader, and the whole list repainted each time (seen in a trace while
+      // scrolling back through a channel with pictures). The server knows the
+      // dimensions; CSS (.att-img-el--sized) turns them into the same box the
+      // loaded image would get.
+      if (att.width > 0 && att.height > 0) sizeImageBox(img, att.width, att.height);
       img.addEventListener('load', () => {
+        // Correct the reservation if the real picture disagrees (a photo whose
+        // stored size ignores its rotation, say).
+        if (img.naturalWidth && img.naturalHeight) sizeImageBox(img, img.naturalWidth, img.naturalHeight);
         if (state.atBottom) scrollToBottom();
       }, { once: true });
     }

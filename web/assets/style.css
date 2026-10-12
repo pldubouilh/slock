@@ -1233,6 +1233,19 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   transition: border-color var(--t-fast) var(--ease);
 }
 .att-img:hover .att-img-el { border-color: var(--border-strong); }
+/* Box reserved from the known dimensions (JS sets the vars, see sizeImageBox):
+   the width the loaded image would take under the same limits — natural
+   width, 420px, and whatever keeps the height within 340px; the column's
+   width stays with the max-width above (a % here would be circular inside the
+   shrink-to-fit button) — and the height follows from the aspect ratio.
+   object-fit guards against a dimension mismatch until the load handler
+   corrects it. */
+.att-img-el--sized {
+  width: min(var(--att-w), 420px, calc(340px * var(--att-r)));
+  height: auto;
+  aspect-ratio: var(--att-ar);
+  object-fit: contain;
+}
 /* Same oversized-box story as the background: the focus ring must trace the
    image, not the button, or Esc-ing out of the lightbox draws a ring wider
    than the picture. */
