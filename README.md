@@ -9,9 +9,8 @@ A small, fuss-free, fast, self-hosted team chat.
 - Scales well over 100+ concurrent users on tiny 1vcpu host.
 - Markdown & attachments. Lightweight theming. Definitely no threads.
 - Fuzzy search & channel switcher.
-- Simply bot integration.
+- Simple bot integration.
 - Various user roles: admin, standard, limited history, limited channels.
-- IRC inspired terminal client.
 
 <img width="1452" height="879" alt="Image" src="https://github.com/user-attachments/assets/903f4230-a4aa-4dba-9cbf-9ba00b647c50" />
 

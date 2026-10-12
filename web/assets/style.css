@@ -1226,7 +1226,8 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   cursor: zoom-in;
 }
 .att-img-el {
-  max-height: 340px;
+  --att-max-h: 340px; /* also sizes the reserved box below */
+  max-height: var(--att-max-h);
   max-width: min(420px, 100%);
   border: 1px solid var(--border);
   border-radius: var(--r-m);
@@ -1241,7 +1242,7 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
    object-fit guards against a dimension mismatch until the load handler
    corrects it. */
 .att-img-el--sized {
-  width: min(var(--att-w), 420px, calc(340px * var(--att-r)));
+  width: min(var(--att-w), 420px, calc(var(--att-max-h) * var(--att-r)));
   height: auto;
   aspect-ratio: var(--att-ar);
   object-fit: contain;
@@ -1836,6 +1837,22 @@ body > :not(#lightbox) { touch-action: pan-x pan-y; }
 /* ==========================================================================
    modals
    ========================================================================== */
+
+/* Dialogs and the search palette follow the user's zoom (Profile → zoom) like
+   #app does: same pre-divided box, so after the browser scales it by --zoom it
+   still fills the viewport exactly, and everything inside sizes against it.
+   (They used to stay at 100%, so the very panel holding the zoom control
+   didn't show its effect.) */
+.modal-wrap,
+#palette {
+  zoom: var(--zoom, 1);
+  inset: auto;
+  top: 0;
+  left: 0;
+  width: calc(100vw / var(--zoom, 1));
+  height: calc(100vh / var(--zoom, 1));
+  height: calc(100dvh / var(--zoom, 1));
+}
 
 .modal-wrap {
   position: fixed;
@@ -2713,7 +2730,7 @@ body.auth-page {
   .msg-actions { inset-inline-end: var(--sp-3); }
   .composer-area { padding-inline: var(--sp-3); }
 
-  .att-img-el { max-height: 260px; max-width: 100%; }
+  .att-img-el { --att-max-h: 260px; max-width: 100%; }
 
   /* Full-height sheet: the floating card wasted the bottom third of the
      screen. dvh (with a vh fallback) tracks the keyboard on Android, so the
@@ -2722,8 +2739,7 @@ body.auth-page {
   .pal-panel {
     margin-top: 0;
     width: 100%;
-    height: 100vh;
-    height: 100dvh;
+    height: 100%; /* of #palette, whose box is already zoom-corrected */
     border: 0;
     border-radius: 0;
     display: flex;
