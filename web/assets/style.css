@@ -1689,7 +1689,7 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   border-radius: var(--r-s);
   background: var(--bg-2);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: 18px;
   font-weight: 700;
   flex-shrink: 0;
 }

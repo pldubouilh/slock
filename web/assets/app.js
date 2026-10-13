@@ -3862,15 +3862,16 @@ function searchedWhen(at) {
 }
 
 // The "Recent" rows: history resolved against what exists now (a channel you
-// left or lost access to drops out), minus where you are.
-function paletteRecentEntries(all) {
+// left or lost access to drops out), minus where you are and anything already
+// listed above (`skip`: the unread rows).
+function paletteRecentEntries(all, skip = []) {
   const out = [];
   for (const h of readPaletteHistory()) {
     if (out.length >= PAL_RECENT_SHOWN) break;
     if (h.t === 's' && h.q) {
       out.push({
         kind: 'recent-search', id: 0, q: h.q, history: h,
-        title: h.q, sub: `Searched ${searchedWhen(h.at)}`, icon: '⌕',
+        title: h.q, sub: `Searched ${searchedWhen(h.at)}`, icon: '⌕', lens: true,
       });
     } else if (h.t === 'latest') {
       if (state.latest) continue;
@@ -3879,7 +3880,7 @@ function paletteRecentEntries(all) {
     } else if (h.t === 'c') {
       if (h.id === state.currentId) continue;
       const e = all.find((x) => (x.kind === 'channel' || x.kind === 'dm' || x.kind === 'notes') && x.id === h.id);
-      if (e) out.push(Object.assign(e, { history: h }));
+      if (e && !skip.includes(e)) out.push(Object.assign(e, { history: h }));
     }
   }
   return out;
@@ -4059,7 +4060,10 @@ function renderPalette() {
     li.dataset.kind = entry.kind;
     li.dataset.id = entry.id;
     const icon = li.querySelector('.pal-item-icon');
-    if (icon) icon.textContent = entry.icon;
+    // A remembered search wears the search bar's own magnifier.
+    const lens = entry.lens && document.querySelector('#search-trigger svg');
+    if (lens) icon && icon.append(lens.cloneNode(true));
+    else if (icon) icon.textContent = entry.icon;
     const title = li.querySelector('.pal-item-title');
     if (title) title.textContent = entry.title;
     const sub = li.querySelector('.pal-item-sub');
@@ -4078,16 +4082,26 @@ function renderPalette() {
   };
 
   if (!q.raw.trim()) {
-    // Empty: your history first, then what still wants you (drafts, unread…).
+    // Empty: conversations with new messages first, newest message on top (so
+    // Ctrl-K Enter goes to the latest one), then your history, then what
+    // else still wants you (drafts…).
     const all = allPaletteEntries(q);
-    const recent = paletteRecentEntries(all);
+    const unread = all.filter((e) => e.unread && e.id !== state.currentId)
+      .sort((a, b) => b.recency.localeCompare(a.recency))
+      .slice(0, PAL_RECENT_SHOWN);
+    if (unread.length) {
+      list.append(paletteGroupHeader('Unread'));
+      unread.forEach(appendEntry);
+    }
+    const recent = paletteRecentEntries(all, unread);
     if (recent.length) {
       list.append(paletteGroupHeader('Recent'));
       recent.forEach(appendEntry);
     }
-    const rest = all.filter((e) => !recent.includes(e)).slice(0, Math.max(4, 12 - recent.length));
+    const shown = unread.length + recent.length;
+    const rest = all.filter((e) => !unread.includes(e) && !recent.includes(e)).slice(0, Math.max(4, 12 - shown));
     if (rest.length) {
-      list.append(paletteGroupHeader(recent.length ? 'Suggested' : 'Recent'));
+      list.append(paletteGroupHeader(shown ? 'Suggested' : 'Recent'));
       rest.forEach(appendEntry);
     }
   } else {
