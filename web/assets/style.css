@@ -1340,13 +1340,20 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
    text, an empty line reads as absent) so messages never shift and it never
    overlays the message list. */
 #typing-indicator {
-  /*min-height: 15px;*/
   padding: 0 15px 0px;
   font-size: var(--fs-xs);
   line-height: 19px;
   font-style: italic;
   color: var(--text-3);
   height: 22px;
+  /* one line only: JS swaps an over-long list for "Several people are typing…" */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* sits 5px further from the composer box, drawn up into the space above —
+     its box (and so the gap to the last message) stays the same */
+  position: relative;
+  top: -3px;
 }
 
 /* ==========================================================================

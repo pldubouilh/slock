@@ -2616,10 +2616,14 @@ function renderTyping() {
   // The element stays in flow with its line height reserved (see CSS), so
   // only the text toggles — never [hidden] — and the layout never jumps.
   el.hidden = false;
+  const many = 'Several people are typing…';
   el.textContent = !names.length ? ''
     : names.length === 1 ? `${names[0]} is typing…`
-      : names.length === 2 ? `${names[0]} and ${names[1]} are typing…`
-        : 'Several people are typing…';
+      : names.length <= 5 ? `${names.join(', ')} are typing…`
+        : many;
+  // One line, never a scrollbar: a list too wide for it gives way to the
+  // summary (a single long name just ellipsizes, see CSS).
+  if (names.length > 1 && el.scrollWidth > el.clientWidth) el.textContent = many;
   clearTimeout(typingTimer);
   if (names.length) typingTimer = setTimeout(renderTyping, 1000);
 }
