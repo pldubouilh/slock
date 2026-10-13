@@ -119,6 +119,7 @@ because the URL is versioned by content hash.
 | POST | `/api/channels` | `{name, topic?, is_private?}` | `201 {channel}` |
 | GET | `/api/channels/{id}` | – | `200 {channel}` (includes `members`) |
 | PATCH | `/api/channels/{id}` | `{name?, topic?, is_private?}` | `200 {channel}` |
+| DELETE | `/api/channels/{id}` | `{name}` — the channel's name, to confirm | `204` |
 | POST | `/api/channels/{id}/join` | – | `200 {channel}` |
 | POST | `/api/channels/{id}/leave` | – | `204` |
 | POST | `/api/channels/{id}/members` | `{user_id}` | `204` |
@@ -133,6 +134,8 @@ history on every call, so the server stops there and clients render anything at
 the cap as "99+". The same cap applies to the push badge total.
 
 PATCH (and member removal) is admin, or creator while they can still read the channel — a creator removed from their private channel can't flip it public to get back in. `is_private` may be toggled after creation: making a channel private drops it for non-members, making it public exposes it to everyone (allowlist permitting). A privacy change or a rename changes per-viewer visibility (allowlists are by name) in ways one broadcast frame can't express, so both emit `channels.resync` to all clients (they refetch `/api/channels`) alongside a `channel.update` to members; a rename also drops members whose allowlist doesn't cover the new name. Topic-only edits emit `channel.update` with just the shared fields (`id, kind, name, topic, is_private`), to members for a private channel and to allowlist-permitted users for a public one; clients ignore updates for channels they don't know.
+
+DELETE removes a named channel for good, with the same permission as PATCH (admin, or creator while they can still read it). The body must repeat the channel's name (case-insensitive, a leading `#` is fine), or it's `400`; the web client asks twice and then makes you type it. Messages, pins, reactions, memberships and queued pushes cascade; each attached file is removed from storage once no other attachment, avatar or workspace icon uses the same bytes (the store is content-addressed). It emits `channel.delete` to the members of a private channel, or to every allowlist-permitted user for a public one. DMs can't be deleted (`403`).
 
 `GET /api/channels` returns **all** public channels (so the browser/Ctrl-K can
 list ones you have not joined) plus private channels you belong to. `dms` holds
@@ -261,6 +264,7 @@ channel with `after=<last known id>`.
 | `pin` | `{message_id, channel_id, pinned}` — a message was pinned or unpinned |
 | `channel.new` | `{channel: Channel}` — you were added, or a public channel was created |
 | `channel.update` | `{channel: Channel}` |
+| `channel.delete` | `{channel_id}` — the channel was deleted; clients drop it (and move off it if open) |
 | `channel.members` | `{channel_id, members: [id], member_count}` |
 | `channel.read` | `{channel_id, last_read_message_id}` — from your other tabs |
 | `channel.mute` | `{channel_id, muted}` — from your other tabs |

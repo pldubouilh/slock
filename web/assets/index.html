@@ -891,6 +891,11 @@
     <section class="modal modal--confirm" role="alertdialog" aria-modal="true" aria-label="Confirm">
       <div class="modal-body">
         <p class="confirm-text"></p>
+        <!-- shown for "type the name to confirm" (confirmModal opts.typed) -->
+        <label class="field confirm-typed" hidden>
+          <span class="field-label confirm-typed-label"></span>
+          <input class="confirm-typed-input" autocomplete="off" autocapitalize="off" spellcheck="false">
+        </label>
       </div>
       <footer class="modal-foot modal-foot--pad">
         <button type="button" class="btn confirm-cancel">Cancel</button>

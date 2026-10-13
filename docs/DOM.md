@@ -297,7 +297,12 @@ which uses `.modal-open` on `<body>` for scroll locking. Close buttons carry
   `.trow-delete`
 - `#tpl-admin-row` → `.arow` with `.arow-name`, `.arow-email`, `.arow-badges`,
   `.arow-admin-toggle`, `.arow-active-toggle`, `.arow-reset`
-- `#tpl-modal-confirm` → `.confirm-text`, `.confirm-ok`, `.confirm-cancel`
+- `#tpl-modal-confirm` → `.confirm-text`, `.confirm-ok`, `.confirm-cancel`, and
+  a `[hidden]` `.confirm-typed` field (`.confirm-typed-label` +
+  `.confirm-typed-input`) shown for type-to-confirm: `.confirm-ok` stays
+  disabled until the exact text is typed. Deleting a channel (a
+  `.mform-leave.mform-delete` button in channel details, creator or admin only)
+  asks twice, then uses it with the channel's name
 - `#tpl-modal-files` → `.files-title`, `.files-list`, `.files-empty`,
   `.files-more` (pagination button)
 - `#tpl-modal-pins` → `.pins-title`, `.pins-list`, `.pins-empty`

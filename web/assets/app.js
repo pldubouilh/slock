@@ -369,6 +369,14 @@ async function refetchChannels() {
     const startedAt = Date.now();
     const data = await api('/api/channels', { toast: false });
     setChannels(data, startedAt);
+    // setChannels keeps the open channel even when the list no longer has it.
+    // For a named channel that means it is gone — deleted while this client
+    // was not listening, or no longer allowed — so move off it rather than sit
+    // on a channel every fetch refuses. (A DM can be legitimately unlisted.)
+    const cur = state.channels.get(state.currentId);
+    if (cur && cur.kind === 'channel' && !(data.channels || []).some((c) => c.id === cur.id)) {
+      dropDeletedChannel(cur.id, { gone: true });
+    }
     renderSidebar();
     renderChannelHeader();
     updateBadges();
@@ -427,6 +435,34 @@ function forgetPrivateChannel(channelId) {
     if (next) openChannel(next.id);
     else renderChannelHeader();
   }
+}
+
+// A channel was deleted (by you or someone else): forget everything about it
+// on this device — its view, pin, mention flag and unsendable outbox entries
+// (drafts prune themselves on the next persist) — and move off it if open.
+function dropDeletedChannel(channelId, opts = {}) {
+  const ch = state.channels.get(channelId);
+  if (!ch) return;
+  state.channels.delete(channelId);
+  state.chan.delete(channelId);
+  mentionedChans.delete(channelId);
+  if (isChannelPinned(channelId)) togglePinChannel(channelId, { quiet: true });
+  writeOutbox(readOutbox().filter((e) => e.channel_id !== channelId));
+  if (state.currentId === channelId) {
+    state.currentId = null;
+    // Its half-typed text must not follow into the next channel.
+    const ta = byId('composer-input');
+    if (ta) { ta.value = ''; autogrow(); }
+    const next = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
+    if (next) openChannel(next.id);
+    else renderChannelHeader();
+    if (opts.gone) toast(`#${ch.name} is no longer available`);
+    else if (!opts.mine) toast(`#${ch.name} was deleted`);
+  }
+  if (state.latest) loadLatest(); // it may have been showing that channel's messages
+  persistDrafts();
+  renderSidebar();
+  updateBadges();
 }
 
 function sortedDMs() {
@@ -3572,6 +3608,10 @@ function connectSSE() {
     if (state.pinsRefresh) state.pinsRefresh(channel_id);
   });
 
+  es.addEventListener('channel.delete', (e) => {
+    dropDeletedChannel(JSON.parse(e.data).channel_id);
+  });
+
   es.addEventListener('channel.new', (e) => {
     mergeChannel(JSON.parse(e.data).channel);
     renderSidebar();
@@ -3581,7 +3621,7 @@ function connectSSE() {
   // An admin changed this user's channel allowlist: pull a fresh list so newly
   // allowed channels appear and now-forbidden ones drop out (refetchChannels
   // prunes channels the server no longer returns). If the open channel just
-  // became off-limits, leave it — the next fetch there 403s and the user moves.
+  // became off-limits, refetchChannels moves the user off it.
   es.addEventListener('channels.resync', () => { refetchChannels(); });
 
   es.addEventListener('channel.update', (e) => {
@@ -4399,7 +4439,9 @@ function wireModalRoot() {
   });
 }
 
-function confirmModal(text, okLabel) {
+// opts.typed: the OK button stays disabled until exactly this is typed (a
+// last gate before something irreversible).
+function confirmModal(text, okLabel, opts = {}) {
   return new Promise((resolve) => {
     let settled = false;
     const done = (v) => { if (!settled) { settled = true; resolve(v); } };
@@ -4409,6 +4451,21 @@ function confirmModal(text, okLabel) {
     if (t) t.textContent = text;
     const ok = m.q('.confirm-ok');
     if (ok && okLabel) ok.textContent = okLabel;
+    const typedField = m.q('.confirm-typed');
+    const typedInput = m.q('.confirm-typed-input');
+    if (opts.typed && typedField && typedInput && ok) {
+      typedField.hidden = false;
+      const label = m.q('.confirm-typed-label');
+      if (label) label.textContent = `Type ${opts.typed} to confirm`;
+      typedInput.placeholder = opts.typed;
+      const matches = () => typedInput.value.trim() === opts.typed;
+      ok.disabled = true;
+      on(typedInput, 'input', () => { ok.disabled = !matches(); });
+      on(typedInput, 'keydown', (e) => {
+        if (e.key === 'Enter' && matches()) { e.preventDefault(); ok.click(); }
+      });
+      typedInput.focus();
+    }
     on(ok, 'click', () => { done(true); m.close(); });
     on(m.q('.confirm-cancel'), 'click', () => m.close());
   });
@@ -4505,6 +4562,33 @@ function openChannelInfoModal() {
         renderChannelHeader();
         updateBadges();
         toast(`Left #${ch.name}`);
+      } catch { /* toasted */ }
+    });
+  }
+
+  if (canEdit) {
+    // Creator or admin. Asked twice, then the name must be typed.
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'mform-leave mform-delete';
+    del.textContent = `Delete #${ch.name}`;
+    form.append(del);
+    on(del, 'click', async () => {
+      if (blockedOffline('Deleting a channel')) return;
+      if (!await confirmModal(
+        `Delete #${ch.name}? Every message, file and pin in it is deleted too, for everyone.`,
+        'Delete')) return;
+      if (!await confirmModal(
+        `Are you sure? Deleting #${ch.name} cannot be undone.`,
+        'Yes, delete it')) return;
+      if (!await confirmModal(
+        `Last step: deleting #${ch.name} for good.`,
+        'Delete channel', { typed: ch.name })) return;
+      try {
+        await api(`/api/channels/${ch.id}`, { method: 'DELETE', body: { name: ch.name } });
+        m.close();
+        dropDeletedChannel(ch.id, { mine: true });
+        toast(`Deleted #${ch.name}`);
       } catch { /* toasted */ }
     });
   }
@@ -4788,7 +4872,7 @@ function isChannelPinned(id) {
   return pinnedChans.has(Number(id));
 }
 
-function togglePinChannel(id) {
+function togglePinChannel(id, opts = {}) {
   id = Number(id);
   if (!pinnedChans.delete(id)) pinnedChans.add(id);
   if (pinnedChans.size) localStorage.setItem(LS.pinnedChans, JSON.stringify([...pinnedChans]));
@@ -4798,7 +4882,7 @@ function togglePinChannel(id) {
   if (state.latest && latestFavesOnly) loadLatest(); // the pinned set is its filter
   const ch = state.channels.get(id);
   const pinned = pinnedChans.has(id);
-  if (ch) toast(pinned ? `Pinned ${channelDisplayName(ch)}` : `Unpinned ${channelDisplayName(ch)}`);
+  if (ch && !opts.quiet) toast(pinned ? `Pinned ${channelDisplayName(ch)}` : `Unpinned ${channelDisplayName(ch)}`);
 }
 
 // Whether the section has a pinned row, i.e. whether "pinned only" means

@@ -86,6 +86,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/channels", s.auth(s.handleCreateChannel))
 	mux.HandleFunc("GET /api/channels/{id}", s.auth(s.handleGetChannel))
 	mux.HandleFunc("PATCH /api/channels/{id}", s.auth(s.handleUpdateChannel))
+	mux.HandleFunc("DELETE /api/channels/{id}", s.auth(s.handleDeleteChannel))
 	mux.HandleFunc("POST /api/channels/{id}/join", s.auth(s.handleJoinChannel))
 	mux.HandleFunc("POST /api/channels/{id}/leave", s.auth(s.handleLeaveChannel))
 	mux.HandleFunc("POST /api/channels/{id}/members", s.auth(s.handleAddMember))
