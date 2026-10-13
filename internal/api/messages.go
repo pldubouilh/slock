@@ -429,6 +429,11 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) err
 	if err := touchChannel(ctx, tx, id, msg.CreatedAt); err != nil {
 		return err
 	}
+	// @-mentioning someone who is not in the channel brings them in.
+	invited, err := s.inviteMentioned(ctx, tx, basics, msg.ID, body)
+	if err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
@@ -441,9 +446,10 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) err
 	msg.ClientID = in.ClientID
 
 	channel := &db.Channel{ID: basics.ID, Kind: basics.Kind, Name: basics.Name, IsPrivate: basics.IsPrivate}
-	if autoJoin {
-		s.publishMembers(ctx, id)
+	if autoJoin && len(invited) == 0 {
+		s.publishMembers(ctx, id) // announceInvited publishes the list otherwise
 	}
+	s.announceInvited(ctx, id, invited)
 	// Everyone in the channel gets it, sender included: the client dedupes on
 	// client_id against its optimistic row.
 	s.publishToChannel(ctx, id, realtime.Event{Type: "message.new", Data: map[string]any{
@@ -451,6 +457,10 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) err
 		"channel": map[string]any{"id": basics.ID, "kind": basics.Kind, "name": basics.Name},
 		"user":    map[string]any{"id": me.ID, "display_name": me.DisplayName},
 	}}, 0)
+	// After the message, so the note reads below the mention that caused it.
+	for _, u := range invited {
+		s.postSystemMessage(ctx, id, u.ID, u.DisplayName, "was added by "+me.DisplayName)
+	}
 
 	// Detached context: the request is done by the time push finishes.
 	notified := msg

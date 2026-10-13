@@ -183,6 +183,7 @@ attachments and reactions in the same batch.
 - Soft-deleted messages come back with `deleted_at` set and `body: ""`.
 - `{emoji}` is URL-encoded; server caps it at 24 bytes.
 - Posting a message joins the sender to a public channel automatically.
+- **@-mentions invite.** In a named channel (public or private), a new message that @-mentions an active person who is not a member adds them, in the same transaction, so they receive the message live and get pushed like any member. Mentions are matched by display name with the client's rules (the `@` starts the text or follows whitespace or `([{'">`, longest name wins, case-insensitive, ends at a word boundary; inline code and fences don't count). Bots, deactivated accounts and limited users outside their allowlist are skipped. Each invitee gets `channel.new` (its unread count leaves the mention to the `message.new` that follows), everyone gets `channel.members`, and a system note "<invitee> was added by <sender>" lands after the message. The invitee's read marker sits just before the mention, so only that (not the channel's history) shows as unread. Edits and bot posts never invite. DMs are unaffected.
 
 ## Files
 

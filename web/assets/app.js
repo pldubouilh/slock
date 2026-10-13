@@ -211,6 +211,7 @@ const LS = {
   foldChans: 'slock:fold-channels',
   foldDMs: 'slock:fold-dms',
   groupChans: 'slock:group-channels', // '1' = fold channels by name prefix
+  showUnjoined: 'slock:show-unjoined', // '1' = list channels you are not in
   sound: 'slock:sound',
   font: 'slock:font',
   lastChannel: 'slock:last-channel', // a channel id, or 'latest'
@@ -1012,6 +1013,7 @@ function renderInline(text, out) {
         const span = document.createElement('span');
         span.className = 'mention';
         if (mm.user && state.me && mm.user.id === state.me.id) span.classList.add('mention--me');
+        if (mm.user) span.dataset.userId = mm.user.id; // clicking opens their DM
         span.textContent = mm.text;
         out.append(span);
         i += mm.len;
@@ -2955,12 +2957,15 @@ function closeEmojiPicker() {
   }
 }
 
-/* -------- `:name` autocomplete in the composer
+/* -------- `:name` and `@person` autocomplete in the composer
 
    Typing `:eyes` offers matching emoji; Enter/Tab or a click inserts one.
    Matching is prefix-first, then substring — deliberately not the palette's
    fuzzy scorer, which on short shortcodes surfaces surprises (`:ey` matching
-   "monkey") where people expect the obvious answer at the top. */
+   "monkey") where people expect the obvious answer at the top.
+   Typing `@` offers people the same way (channel members first); picking one
+   inserts `@Display Name`, which is what renders and notifies as a mention —
+   and, in a channel, brings someone who is not in it yet in. */
 
 const EMOJI_AUTO_MAX = 8;
 
@@ -2972,6 +2977,49 @@ function emojiTokenAt(ta) {
   const m = left.match(/(?:^|\s)(:([a-z0-9_+-]{2,}))$/i);
   if (!m) return null;
   return { start: ta.selectionStart - m[1].length, query: m[2].toLowerCase() };
+}
+
+// An `@name` token left of the caret, with the same "starts a word" rule as
+// rendered mentions. Spaces are allowed ("@bob sm" still finds Bob Smith):
+// the popup closes once nobody matches.
+function mentionTokenAt(ta) {
+  if (!ta || ta.selectionStart !== ta.selectionEnd) return null;
+  const left = ta.value.slice(0, ta.selectionStart);
+  const m = left.match(/(?:^|[\s([{'">])(@([^\n@`]{0,40}))$/);
+  if (!m) return null;
+  return { start: ta.selectionStart - m[1].length, query: m[2].toLowerCase() };
+}
+
+// People for an `@` query: name prefix before a later word's prefix, members of
+// the open channel before everyone else. Not yourself, not bots.
+function mentionMatches(query) {
+  const ch = state.channels.get(state.currentId);
+  if (ch && ch.kind === 'channel' && !ch.members) loadMembersForMentions(ch);
+  const members = ch && ch.kind === 'channel' && ch.members ? new Set(ch.members) : null;
+  const rows = [];
+  for (const u of state.users.values()) {
+    if (u.is_bot || (state.me && u.id === state.me.id)) continue;
+    const name = (u.display_name || '').toLowerCase();
+    let rank;
+    if (name.startsWith(query)) rank = 0;
+    else if (name.split(/\s+/).some((w) => w.startsWith(query))) rank = 1;
+    else continue;
+    const outside = !!members && !members.has(u.id);
+    rows.push({ u, outside, key: (outside ? 2 : 0) + rank });
+  }
+  rows.sort((a, b) => a.key - b.key || a.u.display_name.localeCompare(b.u.display_name));
+  return rows.slice(0, EMOJI_AUTO_MAX);
+}
+
+// The channel list carries no member ids; fetch them once, the first time `@`
+// is typed in a channel, and redo the popup with members first.
+function loadMembersForMentions(ch) {
+  if (ch.membersLoading) return;
+  ch.membersLoading = true;
+  api(`/api/channels/${ch.id}`, { toast: false }).then((data) => {
+    ch.members = data.channel.members || [];
+    if (emojiAuto && emojiAuto.kind === 'mention' && state.currentId === ch.id) refreshEmojiAuto();
+  }).catch(() => {}).finally(() => { ch.membersLoading = false; });
 }
 
 function emojiMatches(query) {
@@ -3032,7 +3080,7 @@ function placeEmojiAuto() {
   emojiAuto.el.style.insetInlineStart = Math.max(0, Math.min(taLeft + x, max)) + 'px';
 }
 
-let emojiAuto = null; // { el, rows, active, start }
+let emojiAuto = null; // { el, kind: 'emoji' | 'mention', rows, active, start }
 
 function closeEmojiAuto() {
   if (!emojiAuto) return;
@@ -3049,10 +3097,16 @@ function paintEmojiAuto() {
 // Rebuild (or close) the popup for whatever the caret sits on now.
 function refreshEmojiAuto() {
   const ta = byId('composer-input');
-  const tok = emojiTokenAt(ta);
+  let tok = emojiTokenAt(ta);
+  let kind = 'emoji';
+  if (!tok) {
+    tok = mentionTokenAt(ta);
+    kind = 'mention';
+  }
   if (!tok) { closeEmojiAuto(); return; }
-  const rows = emojiMatches(tok.query);
+  const rows = kind === 'emoji' ? emojiMatches(tok.query) : mentionMatches(tok.query);
   if (!rows.length) { closeEmojiAuto(); return; }
+  if (emojiAuto && emojiAuto.kind !== kind) emojiAuto.active = 0;
 
   if (!emojiAuto) {
     const el = document.createElement('ul');
@@ -3066,25 +3120,49 @@ function refreshEmojiAuto() {
       if (li) insertEmojiAt(Number(li.dataset.i));
     });
     (byId('composer') || document.body).append(el);
-    emojiAuto = { el, rows: [], active: 0, start: tok.start };
+    emojiAuto = { el, kind, rows: [], active: 0, start: tok.start };
   }
+  emojiAuto.kind = kind;
   emojiAuto.rows = rows;
   emojiAuto.start = tok.start;
   emojiAuto.active = Math.min(emojiAuto.active, rows.length - 1);
 
   emojiAuto.el.textContent = '';
-  rows.forEach(([char, name], i) => {
+  rows.forEach((row, i) => {
     const li = document.createElement('li');
     li.className = 'emoji-auto-item';
     li.dataset.i = i;
     li.setAttribute('role', 'option');
-    const c = document.createElement('span');
-    c.className = 'emoji-auto-char';
-    c.textContent = char;
     const n = document.createElement('span');
     n.className = 'emoji-auto-name';
-    n.textContent = ':' + name;
-    li.append(c, n);
+    if (kind === 'emoji') {
+      const c = document.createElement('span');
+      c.className = 'emoji-auto-char';
+      c.textContent = row[0];
+      n.textContent = ':' + row[1];
+      li.append(c, n);
+    } else {
+      const av = document.createElement('span');
+      av.className = 'avatar emoji-auto-avatar';
+      av.setAttribute('aria-hidden', 'true');
+      const ini = document.createElement('span');
+      ini.className = 'avatar-initials';
+      const img = document.createElement('img');
+      img.className = 'avatar-img';
+      img.alt = '';
+      img.hidden = true;
+      av.append(ini, img);
+      applyAvatar(av, row.u);
+      n.textContent = row.u.display_name;
+      li.append(av, n);
+      if (row.outside) {
+        // Mentioning them here adds them to the channel (server side).
+        const note = document.createElement('span');
+        note.className = 'emoji-auto-note';
+        note.textContent = 'not in channel';
+        li.append(note);
+      }
+    }
     emojiAuto.el.append(li);
   });
   paintEmojiAuto();
@@ -3097,10 +3175,11 @@ function insertEmojiAt(i) {
   if (!ta || !emojiAuto) return;
   const row = emojiAuto.rows[i];
   if (!row) return;
+  const text = emojiAuto.kind === 'emoji' ? row[0] : '@' + row.u.display_name;
   const start = emojiAuto.start;
   const rest = ta.value.slice(ta.selectionStart);
-  ta.value = ta.value.slice(0, start) + row[0] + ' ' + rest;
-  const caret = start + row[0].length + 1;
+  ta.value = ta.value.slice(0, start) + text + ' ' + rest;
+  const caret = start + text.length + 1;
   closeEmojiAuto();
   ta.focus();
   ta.setSelectionRange(caret, caret);
@@ -3754,7 +3833,8 @@ function localPaletteEntries(q) {
       const score = needle ? fuzzyScore(needle, ch.name) : 0;
       if (score < 0) continue;
       const unread = !isMuted(ch) && (ch.unread_count || 0) > 0;
-      const sub = ch.topic || `${ch.member_count || 0} member${ch.member_count === 1 ? '' : 's'}`;
+      let sub = ch.topic || `${ch.member_count || 0} member${ch.member_count === 1 ? '' : 's'}`;
+      if (!ch.is_member) sub = `Not joined · ${sub}`; // the sidebar may not list it
       entries.push({
         kind: 'channel', id: ch.id, score: score + (ch.is_member ? 1 : 0),
         unread,
@@ -4547,6 +4627,9 @@ let foldDMs = false;
 // it is in-memory, so every group starts folded again on the next load.
 let groupChans = false;
 const openGroups = new Set();
+// Public channels you have not joined stay out of the sidebar unless this is on
+// (Profile → Display); ⌘K always finds them.
+let showUnjoined = false;
 // Channels/DMs with an unread @-mention (or, for DMs, any unread message):
 // surfaced past a fold and counted in the window title even while hidden.
 // In-memory and live-only — cleared when the channel is read.
@@ -4561,6 +4644,13 @@ function loadSidebarPrefs() {
   foldChans = localStorage.getItem(LS.foldChans) === '1';
   foldDMs = localStorage.getItem(LS.foldDMs) === '1';
   groupChans = localStorage.getItem(LS.groupChans) === '1';
+  showUnjoined = localStorage.getItem(LS.showUnjoined) === '1';
+}
+
+function setShowUnjoined(on) {
+  showUnjoined = !!on;
+  if (on) localStorage.setItem(LS.showUnjoined, '1'); else localStorage.removeItem(LS.showUnjoined);
+  renderSidebar();
 }
 
 function isChannelPinned(id) {
@@ -4663,11 +4753,13 @@ function setSectionFolded(kind, on) {
 }
 
 // A folded section shows only pinned rows — plus the open one (never lose your
-// place) and any with an unread mention (a mention must always surface).
+// place) and any with an unread mention (a mention must always surface). An
+// unjoined channel is hidden unless asked for, or pinned, or open.
 function visibleInSidebar(ch) {
+  if (ch.id === state.currentId || mentionedChans.has(ch.id)) return true;
+  if (ch.kind === 'channel' && !ch.is_member && !showUnjoined && !isChannelPinned(ch.id)) return false;
   const folded = ch.kind === 'dm' ? foldDMs : foldChans;
-  return !folded || isChannelPinned(ch.id) || ch.id === state.currentId
-    || mentionedChans.has(ch.id);
+  return !folded || isChannelPinned(ch.id);
 }
 
 /* -------- pinned messages (#msg-pin, #pins-btn) */
@@ -4914,11 +5006,24 @@ function openProfileModal() {
   }
 
   /* -------- display preferences: density, sidebar side, zoom (device-local) */
+  const segs = {
+    density: {
+      get: () => (localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy'),
+      set: (val) => { localStorage.setItem(LS.density, val); applyDensity(val); },
+    },
+    side: {
+      get: () => (localStorage.getItem(LS.side) === 'right' ? 'right' : 'left'),
+      set: (val) => { localStorage.setItem(LS.side, val); applySide(val); },
+    },
+    unjoined: {
+      get: () => (showUnjoined ? 'show' : 'hide'),
+      set: (val) => setShowUnjoined(val === 'show'),
+    },
+  };
   m.qa('.seg').forEach((seg) => {
-    const setting = seg.dataset.setting;
-    const cur = setting === 'density'
-      ? (localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy')
-      : (localStorage.getItem(LS.side) === 'right' ? 'right' : 'left');
+    const setting = segs[seg.dataset.setting];
+    if (!setting) return;
+    const cur = setting.get();
     const paint = (val) => seg.querySelectorAll('button').forEach(
       (b) => b.classList.toggle('seg--on', b.dataset.value === val));
     paint(cur);
@@ -4926,8 +5031,7 @@ function openProfileModal() {
       const b = e.target.closest('button');
       if (!b) return;
       const val = b.dataset.value;
-      if (setting === 'density') { localStorage.setItem(LS.density, val); applyDensity(val); }
-      else { localStorage.setItem(LS.side, val); applySide(val); }
+      setting.set(val);
       paint(val);
     });
   });
@@ -6342,6 +6446,12 @@ function wireMessageList() {
   });
 
   list.addEventListener('click', (e) => {
+    // An @mention of a person is a door to their DM, in Latest too.
+    const mention = e.target.closest('.mention[data-user-id]');
+    if (mention) {
+      openDMWith(Number(mention.dataset.userId));
+      return;
+    }
     if (state.latest) {
       const row = e.target.closest('.msg--latest');
       if (row && !e.target.closest('a[href]')) openLatestRow(row);

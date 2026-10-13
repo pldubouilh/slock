@@ -29,6 +29,11 @@ strings, so the templates are where message/row structure lives.
     .workspace-logo         the built-in SVG mark, shown when there is no icon
     #search-trigger         icon button beside the workspace name — opens the
                         palette (magnifier + "⌘K" hint)
+    (channel rows)          a public channel you have not joined is left out of
+                        #channel-list unless Profile → Display → "Unjoined
+                        channels" is on (localStorage["slock:show-unjoined"],
+                        default hide), it is pinned, open, or has an unread
+                        mention; ⌘K still lists it ("Not joined · …")
     #fold-channels          .fold-btn (pin icon) in the Channels section head,
                         beside #new-channel-btn — folds that section to "pinned
                         only" (localStorage["slock:fold-channels"]); .is-on
@@ -138,6 +143,17 @@ marked `.emoji-auto-item--active`) inside `#composer`, and ↑/↓/Enter/Tab/Esc
 belong to that list while it is open. A whole `:name:` token is swapped for
 its emoji on send.
 
+Typing `@` (at the start or after whitespace / an opening bracket) opens the
+same list for people: `.emoji-auto-avatar` (an `.avatar`) + `.emoji-auto-name`,
+and `.emoji-auto-note` ("not in channel") on someone outside the open channel —
+mentioning them adds them to it. Members of the channel rank first (their ids
+are fetched once, the first time `@` is typed there); yourself and bots are
+left out. Picking inserts `@Display Name `.
+
+A rendered mention of a known person is `span.mention[data-user-id]`
+(`.mention--me` when it is you); in `#message-list` (Latest included) clicking
+it opens that person's DM (your own opens Notes).
+
 ## Templates (in `index.html`, inside `<template>`)
 
 Each lists the classes JS looks for. Nest them however the design needs.
@@ -238,7 +254,7 @@ which uses `.modal-open` on `<body>` for scroll locking. Close buttons carry
   `button.combo` preset pairs), `.combo-sidebar` / `.combo-chat`
   (`input[type=color]`) and `.combo-reset` — these save to
   `localStorage["slock:colors"]` and apply immediately, outside the form submit;
-  plus display prefs: `.seg[data-setting=density|side]` segmented toggles, the
+  plus display prefs: `.seg[data-setting=density|side|unjoined]` segmented toggles, the
   zoom stepper (`.zoom-range`, `.zoom-step[data-dir]`, `.zoom-val` — click to
   reset to 100%) and the font picker (`.font-select`, JS fills it with curated
   stacks minus faces `document.fonts.check` rules out, plus a Custom… entry

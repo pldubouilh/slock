@@ -1004,6 +1004,9 @@ body.view-latest #typing-indicator { display: none; }
   color: var(--text-1);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
+/* a known person: clicking opens their DM (only wired in the message list) */
+#message-list .mention[data-user-id] { cursor: pointer; }
+#message-list .mention[data-user-id]:hover { text-decoration: underline; }
 
 /* consecutive messages from the same author collapse */
 .msg--compact { padding-block: 2px; }
@@ -1556,6 +1559,15 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   white-space: nowrap;
 }
 .emoji-auto-item--active .emoji-auto-name { color: var(--text-1); }
+/* `@` rows: a small avatar, the name, and a note when picking them would add
+   them to the channel */
+.emoji-auto-avatar { width: 20px; height: 20px; font-size: 8px; flex-shrink: 0; }
+.emoji-auto-note {
+  margin-inline-start: auto;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  white-space: nowrap;
+}
 
 /* ==========================================================================
    palette — Ctrl/⌘+K, the signature move
