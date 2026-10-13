@@ -210,6 +210,7 @@ const LS = {
   pinnedChans: 'slock:pinned-channels',
   foldChans: 'slock:fold-channels',
   foldDMs: 'slock:fold-dms',
+  groupChans: 'slock:group-channels', // '1' = fold channels by name prefix
   sound: 'slock:sound',
   font: 'slock:font',
   lastChannel: 'slock:last-channel', // a channel id, or 'latest'
@@ -434,31 +435,74 @@ function sortedDMs() {
       || String(b.last_message_at || '').localeCompare(String(a.last_message_at || '')));
 }
 
+function makeChanRow(ch, nested = false) {
+  const li = tpl('tpl-channel-item');
+  if (!li) return null;
+  li.dataset.id = ch.id;
+  li.classList.toggle('chan--nested', nested); // shown under its "bd-*" group
+  li.classList.toggle('chan--active', ch.id === state.currentId);
+  li.classList.toggle('chan--unread', ch.unread_count > 0 && !isMuted(ch));
+  li.classList.toggle('chan--muted', isMuted(ch));
+  li.classList.toggle('chan--member', !!ch.is_member);
+  li.classList.toggle('chan--private', !!ch.is_private);
+  li.classList.toggle('chan--pinned', isChannelPinned(ch.id));
+  li.classList.toggle('chan--draft', ch.id !== state.currentId && hasDraft(ch.id));
+  const name = li.querySelector('.chan-name');
+  if (name) name.textContent = ch.name;
+  const badge = li.querySelector('.chan-badge');
+  if (badge) {
+    badge.hidden = !(ch.unread_count > 0);
+    badge.textContent = ch.unread_count > 99 ? '99+' : String(ch.unread_count || '');
+  }
+  return li;
+}
+
+// The "bd-*" row standing in for a folded group. Its unread state, badge and
+// draft pencil cover only the channels it hides, so nothing is counted twice.
+function makeChanGroupRow(key, group, shown, expanded) {
+  const li = tpl('tpl-channel-group');
+  const hidden = group.filter((c) => !shown.includes(c));
+  const unread = hidden.filter((c) => !isMuted(c)).reduce((n, c) => n + (c.unread_count || 0), 0);
+  li.dataset.group = key;
+  li.classList.toggle('chan--member', group.some((c) => c.is_member));
+  li.classList.toggle('chan--unread', unread > 0);
+  li.classList.toggle('chan--draft', hidden.some((c) => hasDraft(c.id)));
+  li.classList.toggle('chan-group--open', expanded);
+  const btn = li.querySelector('.chan-btn');
+  btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  btn.title = `${group.length} channels: ${group.map((c) => c.name).join(', ')}`;
+  // Keep the first channel's spelling of the prefix ("BD-" stays "BD-").
+  li.querySelector('.chan-name').textContent = `${group[0].name.slice(0, key.length)}*`;
+  const badge = li.querySelector('.chan-badge');
+  badge.hidden = !(unread > 0);
+  badge.textContent = unread > 99 ? '99+' : String(unread || '');
+  return li;
+}
+
 function renderSidebar() {
   const chanList = byId('channel-list');
   const dmList = byId('dm-list');
   if (chanList) {
     chanList.textContent = '';
-    for (const ch of sortedChannels()) {
-      if (!visibleInSidebar(ch)) continue;
-      const li = tpl('tpl-channel-item');
-      if (!li) break;
-      li.dataset.id = ch.id;
-      li.classList.toggle('chan--active', ch.id === state.currentId);
-      li.classList.toggle('chan--unread', ch.unread_count > 0 && !isMuted(ch));
-      li.classList.toggle('chan--muted', isMuted(ch));
-      li.classList.toggle('chan--member', !!ch.is_member);
-      li.classList.toggle('chan--private', !!ch.is_private);
-      li.classList.toggle('chan--pinned', isChannelPinned(ch.id));
-      li.classList.toggle('chan--draft', ch.id !== state.currentId && hasDraft(ch.id));
-      const name = li.querySelector('.chan-name');
-      if (name) name.textContent = ch.name;
-      const badge = li.querySelector('.chan-badge');
-      if (badge) {
-        badge.hidden = !(ch.unread_count > 0);
-        badge.textContent = ch.unread_count > 99 ? '99+' : String(ch.unread_count || '');
+    const chans = sortedChannels().filter(visibleInSidebar);
+    const groups = prefixGroups(chans);
+    const emitted = new Set();
+    for (const ch of chans) {
+      const group = groups.get(groupKey(ch));
+      if (!group) {
+        const li = makeChanRow(ch);
+        if (!li) break;
+        chanList.append(li);
+        continue;
       }
-      chanList.append(li);
+      // A folded group renders once, where its first channel would sort, with
+      // the channels it must not hide (all of them when expanded) under it.
+      if (emitted.has(group)) continue;
+      emitted.add(group);
+      const expanded = openGroups.has(groupKey(ch));
+      const shown = group.filter((c) => expanded || surfacedInGroup(c));
+      chanList.append(makeChanGroupRow(groupKey(ch), group, shown, expanded));
+      for (const c of shown) chanList.append(makeChanRow(c, true));
     }
   }
   if (dmList) {
@@ -494,6 +538,10 @@ function renderSidebar() {
     notesRow.classList.toggle('chan--active', isNotesChannel(state.channels.get(state.currentId)));
     notesRow.classList.toggle('chan--draft', !!notes && notes.id !== state.currentId && hasDraft(notes.id));
   }
+  // Pins come and go (and channels load after prefs): keep the header pin
+  // toggles in step.
+  reflectFoldButton('channel');
+  reflectFoldButton('dm');
   renderMeChip();
 }
 
@@ -4494,6 +4542,11 @@ function closeDMConversation() {
 let pinnedChans = new Set();
 let foldChans = false;
 let foldDMs = false;
+// Prefix folding: unpinned channels sharing a prefix ("bd-blabla", "bd-bob")
+// collapse into one "bd-*" row. openGroups holds the groups expanded in place;
+// it is in-memory, so every group starts folded again on the next load.
+let groupChans = false;
+const openGroups = new Set();
 // Channels/DMs with an unread @-mention (or, for DMs, any unread message):
 // surfaced past a fold and counted in the window title even while hidden.
 // In-memory and live-only — cleared when the channel is read.
@@ -4507,6 +4560,7 @@ function loadSidebarPrefs() {
   }
   foldChans = localStorage.getItem(LS.foldChans) === '1';
   foldDMs = localStorage.getItem(LS.foldDMs) === '1';
+  groupChans = localStorage.getItem(LS.groupChans) === '1';
 }
 
 function isChannelPinned(id) {
@@ -4526,15 +4580,78 @@ function togglePinChannel(id) {
   if (ch) toast(pinned ? `Pinned ${channelDisplayName(ch)}` : `Unpinned ${channelDisplayName(ch)}`);
 }
 
+// Whether the section has a pinned row, i.e. whether "pinned only" means
+// anything there.
+function sectionHasPinned(kind) {
+  for (const id of pinnedChans) {
+    const ch = state.channels.get(id);
+    if (ch && ch.kind === kind && !isNotesChannel(ch)) return true;
+  }
+  return false;
+}
+
 function reflectFoldButton(kind) {
   const btn = byId(kind === 'dm' ? 'fold-dms' : 'fold-channels');
   if (!btn) return;
   const folded = kind === 'dm' ? foldDMs : foldChans;
   const noun = kind === 'dm' ? 'DMs' : 'channels';
+  // The pin toggle only shows once something in the section is pinned — but
+  // stays while the section is folded, so the fold can always be undone.
+  btn.hidden = !folded && !sectionHasPinned(kind);
   btn.classList.toggle('is-on', folded);
   btn.setAttribute('aria-pressed', folded ? 'true' : 'false');
   btn.title = folded ? `Show all ${noun}` : `Show pinned ${noun} only`;
   btn.setAttribute('aria-label', btn.title);
+}
+
+function reflectGroupButton() {
+  const btn = byId('group-channels');
+  if (!btn) return;
+  btn.classList.toggle('is-on', groupChans);
+  btn.setAttribute('aria-pressed', groupChans ? 'true' : 'false');
+  btn.title = groupChans ? 'Unfold channel groups' : 'Fold channels by prefix (bd-*)';
+  btn.setAttribute('aria-label', btn.title);
+}
+
+function setChannelsGrouped(on) {
+  groupChans = !!on;
+  if (on) localStorage.setItem(LS.groupChans, '1'); else localStorage.removeItem(LS.groupChans);
+  openGroups.clear();
+  reflectGroupButton();
+  renderSidebar();
+}
+
+function toggleChanGroup(key) {
+  if (!openGroups.delete(key)) openGroups.add(key);
+  renderSidebar();
+}
+
+// "bd-blabla" -> "bd-": the name up to and including its first separator.
+// Pinned channels never fold; they are pinned to stay in sight.
+function groupKey(ch) {
+  if (!groupChans || isChannelPinned(ch.id)) return null;
+  const m = /^[^-_.]+[-_.]/.exec(ch.name || '');
+  return m ? m[0].toLowerCase() : null;
+}
+
+// Prefix -> its channels, for prefixes shared by two or more channels; a lone
+// "bd-x" stays a plain row.
+function prefixGroups(chans) {
+  const groups = new Map();
+  for (const ch of chans) {
+    const key = groupKey(ch);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(ch);
+  }
+  for (const [key, list] of groups) if (list.length < 2) groups.delete(key);
+  return groups;
+}
+
+// Inside a folded group, the open channel (reached from search, say) and one
+// with an unread mention still show, until you leave or read it.
+function surfacedInGroup(ch) {
+  return ch.id === state.currentId || mentionedChans.has(ch.id);
 }
 
 function setSectionFolded(kind, on) {
@@ -6318,7 +6435,8 @@ function wireMessageList() {
 function wireSidebar() {
   const open = (e) => {
     const li = e.target.closest('.chan, .dm');
-    if (li && li.dataset.id) openChannel(Number(li.dataset.id));
+    if (li && li.dataset.group) toggleChanGroup(li.dataset.group);
+    else if (li && li.dataset.id) openChannel(Number(li.dataset.id));
   };
   on(byId('channel-list'), 'click', open);
   on(byId('dm-list'), 'click', open);
@@ -6328,8 +6446,10 @@ function wireSidebar() {
   on(byId('new-dm-btn'), 'click', openNewDMModal);
   on(byId('fold-channels'), 'click', () => setSectionFolded('channel', !foldChans));
   on(byId('fold-dms'), 'click', () => setSectionFolded('dm', !foldDMs));
-  reflectFoldButton('channel'); // reflect the saved state on both buttons
+  on(byId('group-channels'), 'click', () => setChannelsGrouped(!groupChans));
+  reflectFoldButton('channel'); // reflect the saved state on the header buttons
   reflectFoldButton('dm');
+  reflectGroupButton();
   on(byId('nav-toggle'), 'click', () => {
     if (document.body.classList.toggle('nav-open')) dismissKeyboard();
   });

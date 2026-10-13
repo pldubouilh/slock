@@ -517,11 +517,21 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 }
 .side-sec-actions { display: flex; align-items: center; gap: 2px; }
 .side-sec-head .iconbtn { width: 26px; height: 26px; }
-/* the fold-to-pinned toggle sits beside each section's + button; the chevron
-   flips when the section is folded */
+/* section header toggles beside the + button: the pin shows pinned rows only,
+   the chevron (channels) folds by name prefix and flips while on */
 .fold-btn.is-on { color: var(--accent); }
 .collapse-ic { transition: transform var(--t-fast) var(--ease); }
 .fold-btn.is-on .collapse-ic { transform: rotate(180deg); }
+
+/* a folded "bd-*" group: a chevron at the row end turns when expanded; the
+   channels it shows (expanded, open, or mentioned) follow it, a touch indented */
+.chan-group-chev {
+  flex-shrink: 0;
+  color: var(--text-3);
+  transition: transform var(--t-fast) var(--ease);
+}
+.chan-group--open .chan-group-chev { transform: rotate(90deg); }
+.chan--nested .chan-btn { padding-inline-start: 16px; }
 
 .side-list { padding: 0 var(--sp-2); }
 

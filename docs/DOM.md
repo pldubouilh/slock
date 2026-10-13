@@ -29,11 +29,24 @@ strings, so the templates are where message/row structure lives.
     .workspace-logo         the built-in SVG mark, shown when there is no icon
     #search-trigger         icon button beside the workspace name — opens the
                         palette (magnifier + "⌘K" hint)
-    #fold-channels          .fold-btn in the Channels section head, beside
-                        #new-channel-btn — folds that section to "pinned only"
-                        (localStorage["slock:fold-channels"]); .is-on + chevron
-                        flips when folded
-    #fold-dms               same for the DMs section head, beside #new-dm-btn
+    #fold-channels          .fold-btn (pin icon) in the Channels section head,
+                        beside #new-channel-btn — folds that section to "pinned
+                        only" (localStorage["slock:fold-channels"]); .is-on
+                        (accent) when folded. [hidden] until a channel in the
+                        section is pinned (kept while folded, to undo it)
+    #group-channels         .fold-btn (chevron) beside it — folds unpinned
+                        channels sharing a name prefix ("bd-blabla", "bd-bob")
+                        into one #tpl-channel-group "bd-*" row
+                        (localStorage["slock:group-channels"]); .is-on + the
+                        chevron flips when on. Clicking a group row expands it
+                        in place (in-memory, folded again on reload). A folded
+                        group still shows, right under it (.chan--nested, a
+                        slight indent), the open
+                        channel (e.g. reached from ⌘K) and any with an unread
+                        mention; they fold back once left / read. The group
+                        row's badge, bold and draft pencil cover only the
+                        channels it hides
+    #fold-dms               same pin toggle for the DMs section head, beside #new-dm-btn
                         (localStorage["slock:fold-dms"]) — the two fold
                         independently. A folded section shows only pinned rows,
                         the open one, and any with an unread @-mention (or, for
@@ -178,6 +191,11 @@ write `textContent` on the avatar element itself — that would delete the image
   `.chan--unread`, `.chan--muted`, `.chan--member`, `.chan--private` — CSS
   swaps the `.chan-hash` icon for `.chan-lock` on private channels)
   - `.chan-name`, `.chan-badge` (unread count, JS toggles `[hidden]`)
+- `#tpl-channel-group` → `.chan.chan-group` (dataset.group = the lowercased
+  prefix, e.g. "bd-"; `.chan--member`, `.chan--unread`, `.chan--draft`,
+  `.chan-group--open`; the button carries `aria-expanded`)
+  - asterisk `.chan-icon`, `.chan-name` ("bd-*"), `.row-draft`, `.chan-badge`
+    (unread of the hidden channels), `.chan-group-chev` (turns when open)
 - `#tpl-dm-item` → `.dm` (dataset.id, dataset.userId; `.dm--active`,
   `.dm--unread`, `.dm--online`)
   - `.dm-avatar`, `.dm-name`, `.dm-badge`, `.dm-presence`
