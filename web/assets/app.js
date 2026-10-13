@@ -1512,6 +1512,7 @@ async function openChannel(channelId, opts = {}) {
 
   renderSidebar();
   renderChannelHeader();
+  updateBadges(); // what counts toward the title depends on what's open
 
   const st = chanState(channelId);
   // Not loaded, or a detached window opened plainly (not to jump somewhere):
@@ -1681,6 +1682,7 @@ async function openLatest(opts = {}) {
   closeHeaderMenu();
   renderSidebar();
   renderChannelHeader();
+  updateBadges();
   renderTyping();
   await loadLatest();
 }
@@ -7043,6 +7045,9 @@ function wireBackButton() {
   };
   if (guarded) trap();
   window.addEventListener('popstate', (e) => {
+    // Browsers may put back the title the entry was created under ("(1)" from
+    // before you read it): always rewrite it from the current unread state.
+    updateBadges();
     if (guarded) {
       const closedSomething = (emojiPickerEl && (closeEmojiPicker(), true))
         || closeLightbox() || closePalette() || closeTopModal() || closeMeMenu()
@@ -7121,7 +7126,6 @@ function wireVisibility() {
     persistDrafts();
     flushMarkRead();
   });
-
   // Phone keyboards: when the visual viewport shrinks under a focused
   // composer, scroll the composer back into view and keep the message list
   // pinned to its bottom (iOS pans instead of resizing the layout).
