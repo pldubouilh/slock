@@ -69,8 +69,8 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) e
 		Email   string `json:"email"`
 		IsAdmin bool   `json:"is_admin"`
 		// DisplayName is optional now: the web UI omits it (the user picks a
-		// name on first login), but the CLI and any older client may still send
-		// one, in which case it is used as the initial name.
+		// name on first login), but an API caller may still send one, in which
+		// case it is used as the initial name.
 		DisplayName string `json:"display_name"`
 		// LimitHistory hides everything said before this account existed:
 		// history pages, search, pins, attachment lists, unread counts.

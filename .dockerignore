@@ -7,7 +7,6 @@
 
 # local build outputs
 /slock
-/slock-cli
 
 # local runtime data, logs, and the real config (may hold secrets)
 /data

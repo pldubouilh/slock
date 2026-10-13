@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
     -ldflags="-s -w -X slock/internal/version.override=${VERSION}" \
-    -o /out/slock ./cmd/slock
+    -o /out/slock .
 
 FROM alpine:3.21
 

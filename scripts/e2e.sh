@@ -40,7 +40,7 @@ psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d postgres -q \
 # Build once and run the binary directly: `go run` forks the real process, so
 # killing it would leave the server holding the port.
 BIN="$WORK/slock"
-go build -o "$BIN" ./cmd/slock || exit 1
+go build -o "$BIN" . || exit 1
 
 # Push needs no setup: the server mints its keypair into the database on first
 # boot, so the push path is exercised rather than skipped.

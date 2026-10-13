@@ -25,12 +25,7 @@ jobs:
           # server: linux only (it runs next to postgres)
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH="$arch" \
-              go build -trimpath -ldflags "$ldflags" -o "dist/slock_linux_${arch}" ./cmd/slock
-          done
-          # cli: linux and macos (the TUI is unix-only)
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
-            CGO_ENABLED=0 GOOS="${target%/*}" GOARCH="${target#*/}" \
-              go build -trimpath -ldflags "$ldflags" -o "dist/slock-cli_${target%/*}_${target#*/}" ./cmd/slock-cli
+              go build -trimpath -ldflags "$ldflags" -o "dist/slock_linux_${arch}" .
           done
           (cd dist && sha256sum * > SHA256SUMS)
 

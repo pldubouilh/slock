@@ -62,4 +62,4 @@ echo
 echo "  forgot the admin password?  scripts/testdb.sh reset  then restart"
 echo
 
-exec go run ./cmd/slock
+exec go run .

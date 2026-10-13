@@ -4,7 +4,7 @@
 Boots nothing itself: point it at an already-running server whose database is
 empty apart from the bootstrap admin.
 
-    DATABASE_URL=... go run ./cmd/slock &
+    DATABASE_URL=... go run . &
     python3 scripts/smoke.py http://127.0.0.1:8099 admin@localhost hunter2hunter2
 
 Exits non-zero on the first failure, with the request and response that broke.
