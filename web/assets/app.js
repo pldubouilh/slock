@@ -219,6 +219,7 @@ const LS = {
   outbox: 'slock:outbox',            // messages sent but not yet confirmed (see outbox)
   latestFaves: 'slock:latest-faves', // '1' = Latest shows pinned channels only
   latestDMs: 'slock:latest-dms',     // '0' = Latest leaves DMs out
+  palHistory: 'slock:palette-history', // ⌘K "Recent": places opened + searches followed
 };
 
 function chanState(id) {
@@ -1463,6 +1464,7 @@ async function openChannel(channelId, opts = {}) {
   state.currentId = channelId;
   resetComposerMode();
   localStorage.setItem(LS.lastChannel, String(channelId));
+  rememberInPalette({ t: 'c', id: channelId });
   // A real swap earns a history entry, so back walks the channels visited
   // (leaving Latest counts). Re-opening the same channel, or arriving from
   // popstate, must not.
@@ -1630,6 +1632,7 @@ async function openLatest(opts = {}) {
   state.currentId = null;
   setLatestView(true);
   resetComposerMode();
+  rememberInPalette({ t: 'latest' });
   // The composer is hidden here, but its text must not follow into the next
   // channel opened (restoreDraft only fills in a channel that has a draft).
   const ta = byId('composer-input');
@@ -3768,6 +3771,75 @@ const pal = {
 
 function paletteEl() { return byId('palette'); }
 
+/* -------- ⌘K history (device-local)
+
+   An empty palette opens on "Recent": the conversations you opened and the
+   message searches you followed (picked a result of), newest first, mixed.
+   Kept in localStorage only — the server never sees it. Entries are
+   {t: 'c', id} (a channel/DM/Notes), {t: 'latest'} or {t: 's', q} (a search),
+   each with `at` (ms). */
+
+const PAL_HISTORY_MAX = 20;  // stored
+const PAL_RECENT_SHOWN = 8;  // shown
+
+function readPaletteHistory() {
+  try {
+    const list = JSON.parse(localStorage.getItem(LS.palHistory) || '[]');
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+function sameHistoryEntry(a, b) {
+  return a.t === b.t && (a.t === 'c' ? a.id === b.id : a.t === 's' ? a.q === b.q : true);
+}
+
+// Move (or add) an entry to the front.
+function rememberInPalette(entry) {
+  entry = Object.assign({}, entry, { at: Date.now() });
+  const list = [entry, ...readPaletteHistory().filter((e) => !sameHistoryEntry(e, entry))];
+  try {
+    localStorage.setItem(LS.palHistory, JSON.stringify(list.slice(0, PAL_HISTORY_MAX)));
+  } catch { /* storage full or blocked: history is a nicety */ }
+}
+
+function forgetInPalette(entry) {
+  const list = readPaletteHistory().filter((e) => !sameHistoryEntry(e, entry));
+  try { localStorage.setItem(LS.palHistory, JSON.stringify(list)); } catch { /* nicety */ }
+}
+
+// "just now", "5m ago", "3d ago" — or a plain date past a week ("Oct 3").
+function searchedWhen(at) {
+  const rel = relativeTime(new Date(at).toISOString());
+  if (rel === 'now') return 'just now';
+  return /^\d+[mhd]$/.test(rel) ? `${rel} ago` : rel;
+}
+
+// The "Recent" rows: history resolved against what exists now (a channel you
+// left or lost access to drops out), minus where you are.
+function paletteRecentEntries(all) {
+  const out = [];
+  for (const h of readPaletteHistory()) {
+    if (out.length >= PAL_RECENT_SHOWN) break;
+    if (h.t === 's' && h.q) {
+      out.push({
+        kind: 'recent-search', id: 0, q: h.q, history: h,
+        title: h.q, sub: `Searched ${searchedWhen(h.at)}`, icon: '⌕',
+      });
+    } else if (h.t === 'latest') {
+      if (state.latest) continue;
+      const e = all.find((x) => x.kind === 'latest');
+      if (e) out.push(Object.assign(e, { history: h }));
+    } else if (h.t === 'c') {
+      if (h.id === state.currentId) continue;
+      const e = all.find((x) => (x.kind === 'channel' || x.kind === 'dm' || x.kind === 'notes') && x.id === h.id);
+      if (e) out.push(Object.assign(e, { history: h }));
+    }
+  }
+  return out;
+}
+
 function openPalette(prefill = '') {
   const p = paletteEl();
   const input = byId('palette-input');
@@ -3821,6 +3893,12 @@ function fuzzyScore(needle, hay) {
 }
 
 function localPaletteEntries(q) {
+  const all = allPaletteEntries(q);
+  return all.slice(0, q.textStr.replace(/^[#@]/, '') ? 8 : 12);
+}
+
+// Every channel, conversation and person for q, best first (unsliced).
+function allPaletteEntries(q) {
   const raw = q.raw.trim();
   const biasChannels = raw.startsWith('#');
   const biasPeople = raw.startsWith('@');
@@ -3882,7 +3960,9 @@ function localPaletteEntries(q) {
       if (score < 0) continue;
       const dm = dmByPeer.get(u.id);
       const unread = !!dm && !isMuted(dm) && (dm.unread_count || 0) > 0;
-      const sub = u.status_text || (state.online.has(u.id) ? 'online' : '');
+      // "Direct messages" sits where a channel says "3 members"; status after.
+      const extra = u.status_text || (state.online.has(u.id) ? 'online' : '');
+      const sub = extra ? `Direct messages · ${extra}` : 'Direct messages';
       entries.push({
         kind: dm ? 'dm' : 'user',
         id: dm ? dm.id : u.id,
@@ -3890,7 +3970,7 @@ function localPaletteEntries(q) {
         unread,
         recency: (dm && dm.last_message_at) || '',
         title: u.display_name,
-        sub: unread ? `${dm.unread_count} unread${sub ? ' · ' + sub : ''}` : sub,
+        sub: unread ? `${dm.unread_count} unread · ${sub}` : sub,
         icon: '@',
       });
     }
@@ -3909,7 +3989,7 @@ function localPaletteEntries(q) {
     ? (b.score - a.score) || (b.draft - a.draft) || (b.unread - a.unread)
     : (b.draft - a.draft) || (b.unread - a.unread) || (b.score - a.score))
     || b.recency.localeCompare(a.recency));
-  return entries.slice(0, needle ? 8 : 12);
+  return entries;
 }
 
 function paletteGroupHeader(text) {
@@ -3928,22 +4008,48 @@ function renderPalette() {
   list.textContent = '';
   pal.items = [];
 
-  const locals = q.hasFilter && !q.textStr ? [] : localPaletteEntries(q);
-  if (locals.length) {
-    list.append(paletteGroupHeader(q.raw.trim() ? 'Go to' : 'Recent'));
-    for (const entry of locals) {
-      const li = tpl('tpl-palette-item');
-      if (!li) break;
-      li.dataset.kind = entry.kind;
-      li.dataset.id = entry.id;
-      const icon = li.querySelector('.pal-item-icon');
-      if (icon) icon.textContent = entry.icon;
-      const title = li.querySelector('.pal-item-title');
-      if (title) title.textContent = entry.title;
-      const sub = li.querySelector('.pal-item-sub');
-      if (sub) sub.textContent = entry.sub;
-      list.append(li);
-      pal.items.push({ el: li, pick: () => pickPaletteEntry(entry) });
+  const appendEntry = (entry) => {
+    const li = tpl('tpl-palette-item');
+    if (!li) return;
+    li.dataset.kind = entry.kind;
+    li.dataset.id = entry.id;
+    const icon = li.querySelector('.pal-item-icon');
+    if (icon) icon.textContent = entry.icon;
+    const title = li.querySelector('.pal-item-title');
+    if (title) title.textContent = entry.title;
+    const sub = li.querySelector('.pal-item-sub');
+    if (sub) sub.textContent = entry.sub;
+    if (entry.history) {
+      const x = document.createElement('button');
+      x.type = 'button';
+      x.className = 'pal-forget';
+      x.textContent = '×';
+      x.title = 'Remove from recent';
+      x.setAttribute('aria-label', x.title);
+      li.append(x);
+    }
+    list.append(li);
+    pal.items.push({ el: li, pick: () => pickPaletteEntry(entry), entry });
+  };
+
+  if (!q.raw.trim()) {
+    // Empty: your history first, then what still wants you (drafts, unread…).
+    const all = allPaletteEntries(q);
+    const recent = paletteRecentEntries(all);
+    if (recent.length) {
+      list.append(paletteGroupHeader('Recent'));
+      recent.forEach(appendEntry);
+    }
+    const rest = all.filter((e) => !recent.includes(e)).slice(0, Math.max(4, 12 - recent.length));
+    if (rest.length) {
+      list.append(paletteGroupHeader(recent.length ? 'Suggested' : 'Recent'));
+      rest.forEach(appendEntry);
+    }
+  } else {
+    const locals = q.hasFilter && !q.textStr ? [] : localPaletteEntries(q);
+    if (locals.length) {
+      list.append(paletteGroupHeader('Go to'));
+      locals.forEach(appendEntry);
     }
   }
 
@@ -3974,6 +4080,9 @@ function renderPalette() {
       pal.items.push({
         el: li,
         pick: () => {
+          // A search you followed is worth offering again.
+          const typed = byId('palette-input');
+          if (typed && typed.value.trim()) rememberInPalette({ t: 's', q: typed.value.trim() });
           closePalette();
           openChannel(r.channel_id, { jumpTo: r.message.id });
         },
@@ -4086,6 +4195,15 @@ async function openDMWith(userId) {
 }
 
 async function pickPaletteEntry(entry) {
+  if (entry.kind === 'recent-search') {
+    // Run it again, palette open, results below.
+    const input = byId('palette-input');
+    if (!input) return;
+    input.value = entry.q;
+    input.setSelectionRange(input.value.length, input.value.length);
+    onPaletteInput();
+    return;
+  }
   closePalette();
   if (entry.kind === 'channel' || entry.kind === 'dm') {
     openChannel(entry.id);
@@ -4154,11 +4272,23 @@ function wirePalette() {
     }
   });
   if (list) {
+    // The × on a Recent row must not take focus from the input.
+    list.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.pal-forget')) e.preventDefault();
+    });
     list.addEventListener('click', (e) => {
       const li = e.target.closest('.pal-item');
       if (!li) return;
       const idx = pal.items.findIndex((it) => it.el === li);
-      if (idx >= 0) pal.items[idx].pick();
+      if (idx < 0) return;
+      if (e.target.closest('.pal-forget')) {
+        forgetInPalette(pal.items[idx].entry.history);
+        renderPalette();
+        pal.active = Math.min(idx, pal.items.length - 1);
+        applyPaletteActive();
+        return;
+      }
+      pal.items[idx].pick();
     });
     list.addEventListener('mousemove', (e) => {
       const li = e.target.closest('.pal-item');

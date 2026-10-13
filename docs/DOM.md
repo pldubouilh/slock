@@ -118,7 +118,13 @@ strings, so the templates are where message/row structure lives.
 #palette                    Ctrl/⌘+K overlay, JS toggles [hidden]
   #palette-input            <input>
   #palette-hint             the "from:@user in:#channel" hint line
-  #palette-results          <ul>
+  #palette-results          <ul>; empty query: "Recent" (device-local history in
+                            localStorage["slock:palette-history"] — places you
+                            opened and message searches whose result you picked,
+                            newest first, mixed, max 8 shown / 20 kept; the open
+                            one is skipped) then "Suggested" (drafts, unread…).
+                            A recent search row (kind `recent-search`) re-runs
+                            it in place; each Recent row has a `.pal-forget` ×
   #palette-empty            empty state, JS toggles [hidden]
 #lightbox                   image viewer, JS toggles [hidden]; ←/→, the
                             #lightbox-prev/#lightbox-next arrows and swiping

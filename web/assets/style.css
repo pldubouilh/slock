@@ -1657,7 +1657,7 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
 .pal-item:hover { background: var(--bg-2); }
 .pal-item--active {
   background: var(--accent-soft);
-  box-shadow: inset 2px 0 0 var(--accent);
+  /*box-shadow: inset 2px 0 0 var(--accent);*/
 }
 
 .pal-item-icon {
@@ -1675,6 +1675,23 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
 .pal-item--active .pal-item-icon { color: var(--accent); }
 
 .pal-item-text { display: flex; flex-direction: column; min-width: 0; }
+
+/* × on a Recent row: forget it (shown on the hovered / active row, always on
+   touch screens where there is no hover) */
+.pal-forget {
+  margin-inline-start: auto;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: var(--r-s);
+  color: var(--text-3);
+  font-size: 17px;
+  line-height: 1;
+  visibility: hidden;
+}
+.pal-forget:hover { background: var(--bg-3); color: var(--text-1); }
+.pal-item:hover .pal-forget, .pal-item--active .pal-forget { visibility: visible; }
+@media (hover: none) { .pal-forget { visibility: visible; } }
 .pal-item-title {
   font-size: var(--fs-m);
   font-weight: 600;
