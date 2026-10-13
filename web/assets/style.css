@@ -492,6 +492,20 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 }
 #search-trigger:hover { background: var(--bg-2); color: var(--text-1); }
 
+/* hide / show the sidebar (desktop; phones have the drawer instead). #side-hide
+   is an account-menu item, #side-show sits left of the channel name and only
+   while the sidebar is hidden (body.side-hidden). */
+#side-show { display: none; }
+@media (min-width: 761px) {
+  body.side-hidden.side-left #app,
+  body.side-hidden.side-right #app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "main";
+  }
+  body.side-hidden #sidebar { display: none; }
+  body.side-hidden #side-show { display: inline-flex; margin-inline-start: -6px; }
+}
+
 .side-scroll {
   flex: 1;
   min-height: 0;
@@ -2742,6 +2756,7 @@ body.auth-page {
 
   #nav-toggle { display: inline-flex; }
   #side-resize { display: none; } /* the drawer has its own width */
+  #me-menu #side-hide { display: none; } /* hiding is a desktop thing */
 
   /* touch targets */
   .iconbtn { width: 40px; height: 40px; }

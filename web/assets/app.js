@@ -202,6 +202,7 @@ const state = {
 const LS = {
   theme: 'slock:theme',
   side: 'slock:side',
+  sideHidden: 'slock:side-hidden', // '1' = desktop sidebar folded away
   colors: 'slock:colors',
   density: 'slock:density',
   sidebarW: 'slock:sidebar-width',
@@ -5894,7 +5895,15 @@ function applyTheme(value) {
   if (value === 'dark' || value === 'light') html.dataset.theme = value;
   else delete html.dataset.theme;
   const btn = byId('theme-btn');
-  if (btn) btn.textContent = `Theme: ${value === 'dark' ? 'dark' : value === 'light' ? 'light' : 'system'}`;
+  if (btn) {
+    const mode = value === 'dark' || value === 'light' ? value : 'system';
+    // The label span, not the button: its icon must survive.
+    const label = btn.querySelector('.theme-label') || btn;
+    label.textContent = `Theme: ${mode}`;
+    btn.querySelectorAll('.theme-ic').forEach((ic) => {
+      ic.hidden = !ic.classList.contains(`theme-ic--${mode}`);
+    });
+  }
   applyColors(); // each theme has its own custom-colour slot
 }
 
@@ -6035,6 +6044,15 @@ function applyColors() {
 
 // Sidebar side and message density (both device-local) are set from the
 // profile modal now. These stay pure appliers so boot and the modal share them.
+// Desktop only — the CSS ignores body.side-hidden under the phone breakpoint,
+// where the sidebar is a drawer.
+function setSidebarHidden(on) {
+  document.body.classList.toggle('side-hidden', !!on);
+  try {
+    if (on) localStorage.setItem(LS.sideHidden, '1'); else localStorage.removeItem(LS.sideHidden);
+  } catch { /* still applies for this session */ }
+}
+
 function applySide(value) {
   // Default is left; only an explicit "right" moves the sidebar.
   document.body.classList.toggle('side-right', value === 'right');
@@ -6380,28 +6398,30 @@ function toggleSound() {
 async function refreshNotifButton() {
   const btn = byId('notifications-btn');
   if (!btn) return;
+  // Write into the label span, not the button: its bell icon must survive.
+  const label = btn.querySelector('.notif-label') || btn;
   if (!pushSupported()) {
     btn.disabled = true;
     btn.title = 'Push notifications are not supported in this browser.';
-    btn.textContent = 'Notifications unavailable';
+    label.textContent = 'Notifications unavailable';
     return;
   }
   if (!state.pushKey) {
     btn.disabled = true;
     btn.title = 'Push is disabled on this server (no VAPID key configured).';
-    btn.textContent = 'Notifications unavailable';
+    label.textContent = 'Notifications unavailable';
     return;
   }
   if (Notification.permission === 'denied') {
     btn.disabled = true;
     btn.title = 'Notifications are blocked for this site in your browser settings.';
-    btn.textContent = 'Notifications blocked';
+    label.textContent = 'Notifications blocked';
     return;
   }
   const sub = await currentPushSubscription();
   btn.disabled = false;
   btn.title = '';
-  btn.textContent = sub ? 'Notifications: on' : 'Enable notifications';
+  label.textContent = sub ? 'Notifications: on' : 'Enable notifications';
 }
 
 // Only ever called from an explicit click on #notifications-btn.
@@ -6690,6 +6710,8 @@ function wireSidebar() {
   reflectFoldButton('channel'); // reflect the saved state on the header buttons
   reflectFoldButton('dm');
   reflectGroupButton();
+  on(byId('side-hide'), 'click', () => { closeMeMenu(); setSidebarHidden(true); });
+  on(byId('side-show'), 'click', () => setSidebarHidden(false));
   on(byId('nav-toggle'), 'click', () => {
     if (document.body.classList.toggle('nav-open')) dismissKeyboard();
   });
@@ -7148,6 +7170,7 @@ async function boot() {
   window.scrollTo(0, 0);
   applyTheme(localStorage.getItem(LS.theme) || 'system');
   applySide(localStorage.getItem(LS.side) === 'right' ? 'right' : 'left');
+  document.body.classList.toggle('side-hidden', localStorage.getItem(LS.sideHidden) === '1');
   applyDensity(localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy');
   applySidebarWidth(parseInt(localStorage.getItem(LS.sidebarW), 10) || 0);
   applyZoom(parseFloat(localStorage.getItem(LS.zoom)) || 1);

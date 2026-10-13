@@ -69,10 +69,17 @@ strings, so the templates are where message/row structure lives.
     #new-dm-btn             button
     #me-chip                current user button (opens #me-menu)
       #me-avatar  #me-name
-    #me-menu                popup: #profile-btn #notifications-btn #sound-btn
+    #me-menu                popup: #profile-btn #notifications-btn (state text in
+                            .notif-label, so the bell stays) #sound-btn
                             (new-message blip toggle, device-local
                             localStorage["slock:sound"], .sound-label shows
-                            on/off) #theme-btn #admin-btn #logout-btn (message
+                            on/off) #theme-btn (.theme-label + one .theme-ic per
+                            mode — system/dark/light — JS unhides the current
+                            one) #side-hide (desktop only: hides
+                            the sidebar — body.side-hidden, localStorage
+                            ["slock:side-hidden"]; not shown on phones, and the
+                            CSS ignores side-hidden under the phone breakpoint)
+                            #admin-btn #logout-btn (message
                             density, sidebar side and view zoom moved into the
                             profile modal)
     #side-resize            desktop drag handle on the sidebar's inner edge;
@@ -81,6 +88,8 @@ strings, so the templates are where message/row structure lives.
   #main
     #channel-header
       #nav-toggle           mobile hamburger (hidden on desktop by CSS)
+      #side-show            desktop iconbtn left of the title, shown only while
+                            body.side-hidden — brings the sidebar back
       #title-lock           small svg lock, JS shows it for private channels
                             (whose title is then the bare name, no sigil)
       #channel-title        e.g. "# design" or a person's name
