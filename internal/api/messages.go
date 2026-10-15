@@ -44,6 +44,9 @@ func (s *Server) postSystemMessage(ctx context.Context, channelID, actorID int64
 		log.Printf("api: system message channel %d: %v", channelID, err)
 		return
 	}
+	if basics.Kind == db.KindNote {
+		return // a note is its text: no activity lines in it
+	}
 	var msg db.Message
 	if err := s.DB.Pool.QueryRow(ctx,
 		`INSERT INTO messages (channel_id, user_id, body, kind) VALUES ($1, $2, $3, 'system')
@@ -354,6 +357,9 @@ func (s *Server) handleCreateMessage(w http.ResponseWriter, r *http.Request) err
 	basics, err := s.channelBasics(ctx, id)
 	if err != nil {
 		return err
+	}
+	if basics.Kind == db.KindNote {
+		return httpx.BadRequest("A note holds text, not messages.")
 	}
 	member, err := s.isMember(ctx, id, me.ID)
 	if err != nil {

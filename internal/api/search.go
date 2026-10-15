@@ -134,7 +134,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 	limit := httpx.Clamp(httpx.QueryInt(r, "limit", 30), 1, 100)
 
 	if q.Text == "" && q.From == "" && q.Channel == "" {
-		httpx.JSON(w, http.StatusOK, map[string]any{"results": []db.SearchResult{}})
+		httpx.JSON(w, http.StatusOK, map[string]any{"results": []db.SearchResult{}, "notes": []noteHit{}})
 		return nil
 	}
 
@@ -233,6 +233,14 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 		results[i].Message = msgs[i]
 	}
 
-	httpx.JSON(w, http.StatusOK, map[string]any{"results": results})
+	// Notes have no author or messages, so from: and in: leave them out.
+	notes := []noteHit{}
+	if q.From == "" && q.Channel == "" {
+		if notes, err = s.searchNotes(r.Context(), me, noteSearchWords(q.Text)); err != nil {
+			return err
+		}
+	}
+
+	httpx.JSON(w, http.StatusOK, map[string]any{"results": results, "notes": notes})
 	return nil
 }

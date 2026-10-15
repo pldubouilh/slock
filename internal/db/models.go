@@ -117,6 +117,7 @@ type Channel struct {
 	MemberCount int     `json:"member_count"`
 	PeerUserID  *int64  `json:"peer_user_id,omitempty"` // DMs only
 	Members     []int64 `json:"members,omitempty"`
+	NoteRev     int64   `json:"note_rev,omitempty"` // notes, in the list only: the text's revision
 }
 
 type Message struct {

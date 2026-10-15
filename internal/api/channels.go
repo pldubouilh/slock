@@ -264,10 +264,12 @@ WITH my AS (
     SELECT c.* FROM channels c
      WHERE ((c.kind = 'channel' AND (NOT c.is_private OR c.id IN (SELECT channel_id FROM my)))
         OR (c.kind = 'dm' AND c.id IN (SELECT channel_id FROM my)
-            AND (c.last_message_at IS NOT NULL OR c.created_by = $1)))
+            AND (c.last_message_at IS NOT NULL OR c.created_by = $1))
+        -- notes: the ones you are in, and public ones unless you are limited
+        OR (c.kind = 'note' AND (c.id IN (SELECT channel_id FROM my) OR (NOT c.is_private AND $2))))
        -- limited users ($2 false) only see allowlisted named channels; DMs
-       -- are never restricted.
-       AND (c.kind = 'dm' OR $2 OR c.name = ANY($3::text[]))
+       -- and notes are never matched against the list.
+       AND (c.kind IN ('dm', 'note') OR $2 OR c.name = ANY($3::text[]))
 ), counts AS (
     SELECT cm.channel_id, count(*) AS member_count
       FROM channel_members cm
@@ -345,9 +347,10 @@ func (s *Server) announcePublicChannel(ctx context.Context, channelName string, 
 	s.Hub.PublishUsers(ids, ev)
 }
 
-// handleListChannels returns {channels, dms} for the caller: every public
-// channel plus private ones they belong to, and their DM conversations, each
-// with unread_count, member_count and last_message_at.
+// handleListChannels returns {channels, dms, notes} for the caller: every
+// public channel plus private ones they belong to, their DM conversations,
+// and the notes they may open, each with unread_count, member_count and
+// last_message_at.
 func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) error {
 	me := currentUser(r)
 	allowAll, allowed := me.AllowedChannelsSQL()
@@ -359,22 +362,36 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) erro
 
 	channels := []db.Channel{}
 	dms := []db.Channel{}
+	notes := []db.Channel{}
 	for rows.Next() {
 		c, err := scanChannel(rows)
 		if err != nil {
 			return err
 		}
-		if c.Kind == db.KindDM {
+		switch c.Kind {
+		case db.KindDM:
 			dms = append(dms, *c)
-		} else {
+		case db.KindNote:
+			notes = append(notes, *c)
+		default:
 			channels = append(channels, *c)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if err := s.fillNoteRevs(r.Context(), notes); err != nil {
+		return err
+	}
 
 	sort.Slice(channels, func(i, j int) bool { return channels[i].Name < channels[j].Name })
+	sort.Slice(notes, func(i, j int) bool {
+		a, b := strings.ToLower(notes[i].Name), strings.ToLower(notes[j].Name)
+		if a != b {
+			return a < b
+		}
+		return notes[i].ID < notes[j].ID
+	})
 	sort.Slice(dms, func(i, j int) bool {
 		a, b := dms[i].LastMessageAt, dms[j].LastMessageAt
 		switch {
@@ -388,7 +405,7 @@ func (s *Server) handleListChannels(w http.ResponseWriter, r *http.Request) erro
 		return dms[i].ID > dms[j].ID
 	})
 
-	httpx.JSON(w, http.StatusOK, map[string]any{"channels": channels, "dms": dms})
+	httpx.JSON(w, http.StatusOK, map[string]any{"channels": channels, "dms": dms, "notes": notes})
 	return nil
 }
 
@@ -525,8 +542,13 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 	var set []string
 	var args []any
 	newName := basics.Name
+	isNote := basics.Kind == db.KindNote
 	if in.Name != nil {
-		name, err := normalizeChannelName(*in.Name)
+		normalize := normalizeChannelName
+		if isNote {
+			normalize = normalizeNoteName
+		}
+		name, err := normalize(*in.Name)
 		if err != nil {
 			return err
 		}
@@ -534,7 +556,7 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 		args = append(args, name)
 		set = append(set, "name = $"+strconv.Itoa(len(args)))
 	}
-	if in.Topic != nil {
+	if in.Topic != nil && !isNote {
 		topic := strings.TrimSpace(*in.Topic)
 		if len(topic) > 500 {
 			topic = topic[:500]
@@ -543,6 +565,9 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 		set = append(set, "topic = $"+strconv.Itoa(len(args)))
 	}
 	privacyChanged := in.IsPrivate != nil && *in.IsPrivate != basics.IsPrivate
+	if privacyChanged && isNote && !*in.IsPrivate && !unrestricted(me) {
+		return httpx.ErrForbidden // a limited user cannot publish to everyone
+	}
 	if in.IsPrivate != nil {
 		args = append(args, *in.IsPrivate)
 		set = append(set, "is_private = $"+strconv.Itoa(len(args)))
@@ -559,7 +584,7 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 	}
 
 	renamed := newName != basics.Name
-	if renamed {
+	if renamed && !isNote {
 		// Limited users allowed the old name but not the new one lose it now.
 		s.pruneDisallowedMembers(ctx, id, newName)
 	}
@@ -568,7 +593,21 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
-	if privacyChanged || renamed {
+	if isNote {
+		// A note's name is not in anyone's allowlist, so only privacy changes
+		// who sees it.
+		switch {
+		case privacyChanged:
+			s.publishToChannel(ctx, id, realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}, 0)
+			s.Hub.PublishAll(realtime.Event{Type: "channels.resync", Data: map[string]any{}})
+		case ch.IsPrivate:
+			s.publishToChannel(ctx, id, realtime.Event{Type: "channel.update", Data: map[string]any{"channel": ch}}, 0)
+		default:
+			s.announcePublicNote(ctx, realtime.Event{Type: "channel.update", Data: map[string]any{
+				"channel": map[string]any{"id": ch.ID, "kind": ch.Kind, "name": ch.Name, "is_private": ch.IsPrivate},
+			}})
+		}
+	} else if privacyChanged || renamed {
 		// Both change who may see the channel: privacy flips visibility, and a
 		// rename moves it in or out of name-based allowlists. Per-viewer access
 		// is awkward to express in one broadcast frame, so — a rare action —
@@ -605,7 +644,7 @@ func (s *Server) handleUpdateChannel(w http.ResponseWriter, r *http.Request) err
 	return nil
 }
 
-// handleJoinChannel adds the caller to a public channel.
+// handleJoinChannel adds the caller to a public channel or note.
 func (s *Server) handleJoinChannel(w http.ResponseWriter, r *http.Request) error {
 	me := currentUser(r)
 	id, err := httpx.PathInt(r, "id")
@@ -617,11 +656,14 @@ func (s *Server) handleJoinChannel(w http.ResponseWriter, r *http.Request) error
 	if err != nil {
 		return err
 	}
-	if basics.Kind != db.KindChannel || basics.IsPrivate {
+	if basics.Kind == db.KindDM || basics.IsPrivate {
 		return httpx.ErrForbidden
 	}
-	if !me.ChannelAllowed(basics.Name) {
+	if basics.Kind == db.KindChannel && !me.ChannelAllowed(basics.Name) {
 		return httpx.ErrForbidden // a limited user cannot join outside its allowlist
+	}
+	if basics.Kind == db.KindNote && !unrestricted(me) {
+		return httpx.ErrForbidden // nor see public notes
 	}
 	tag, err := s.DB.Pool.Exec(ctx,
 		`INSERT INTO channel_members (channel_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, id, me.ID)
@@ -652,7 +694,7 @@ func (s *Server) handleLeaveChannel(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	if basics.Kind != db.KindChannel {
+	if basics.Kind == db.KindDM {
 		return httpx.ErrForbidden
 	}
 	tag, err := s.DB.Pool.Exec(ctx,
@@ -689,7 +731,7 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	if basics.Kind != db.KindChannel {
+	if basics.Kind == db.KindDM {
 		return httpx.ErrForbidden
 	}
 	if !me.IsAdmin {
@@ -714,7 +756,7 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 	}
 	// Don't add a limited user to a channel outside their allowlist — that would
 	// make them a member of a channel they still cannot open.
-	if target := (db.User{AllowedChannels: allowedChannels}); !target.ChannelAllowed(basics.Name) {
+	if target := (db.User{AllowedChannels: allowedChannels}); basics.Kind == db.KindChannel && !target.ChannelAllowed(basics.Name) {
 		return httpx.Conflict("That user is limited to a set of channels that does not include this one.")
 	}
 
@@ -751,7 +793,7 @@ func (s *Server) handleRemoveMember(w http.ResponseWriter, r *http.Request) erro
 	if err != nil {
 		return err
 	}
-	if basics.Kind != db.KindChannel {
+	if basics.Kind == db.KindDM {
 		return httpx.ErrForbidden
 	}
 	if err := s.requireChannelAdmin(ctx, basics, me); err != nil {

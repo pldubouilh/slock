@@ -46,15 +46,20 @@
             <span class="chan-name">Latest</span>
           </button>
         </li>
-        <!-- Notes: your DM with yourself -->
-        <li id="notes-row" class="chan chan--member">
-          <button type="button" class="chan-btn">
+        <!-- Notes: shared plain-text notes, listed under this row (#note-list);
+             the row folds and unfolds the list, + starts a new note -->
+        <li id="notes-row" class="chan chan--member chan-group chan-group--open">
+          <button type="button" class="chan-btn" aria-expanded="true" aria-controls="note-list" title="Fold notes">
             <svg class="ic chan-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2.5h7l3 3v11a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1Z"/><path d="M7.5 9h5M7.5 12h5M7.5 15h3"/></svg>
             <span class="chan-name">Notes</span>
-            <svg class="ic row-draft" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="Draft"><path d="M12.8 3.7a1.8 1.8 0 0 1 2.5 2.5l-8.5 8.6-3.4.9.9-3.4 8.5-8.6Z"/></svg>
+            <svg class="ic collapse-ic notes-chev" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.5l5 5 5-5"/></svg>
+          </button>
+          <button id="new-note-btn" class="iconbtn notes-add" type="button" aria-label="New note" title="New note">
+            <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>
           </button>
         </li>
       </ul>
+      <ul id="note-list" class="side-list side-list--notes"></ul>
 
       <section class="side-sec">
         <div class="side-sec-head">
@@ -191,6 +196,22 @@
         <span>Loading older messages…</span>
       </div>
       <ol id="message-list"></ol>
+    </div>
+
+    <!-- an open note (body.view-note): its whole text, plain, edited live with
+         everyone else who has it open -->
+    <div id="note-view" hidden>
+      <!-- the sheet behind the text column; drag either edge to widen or
+           narrow it (desktop only, double-click resets) -->
+      <div id="note-sheet" aria-hidden="true"></div>
+      <label class="visually-hidden" for="note-editor">Note</label>
+      <textarea id="note-editor" spellcheck="true" autocomplete="off" maxlength="500000" placeholder="Write anything…"></textarea>
+      <div class="note-grip note-grip--start" aria-hidden="true"></div>
+      <div class="note-grip note-grip--end" aria-hidden="true"></div>
+      <!-- other people's carets, drawn over the editor; positions are measured
+           on the invisible mirror, which lays the text out like the editor -->
+      <div id="note-carets" aria-hidden="true"></div>
+      <div id="note-mirror" aria-hidden="true"></div>
     </div>
 
     <div class="composer-area">
@@ -378,6 +399,18 @@
       <svg class="ic row-draft" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="Draft"><path d="M12.8 3.7a1.8 1.8 0 0 1 2.5 2.5l-8.5 8.6-3.4.9.9-3.4 8.5-8.6Z"/></svg>
       <svg class="ic row-pin" viewBox="0 0 20 20" width="12" height="12" fill="currentColor" stroke="none" aria-hidden="true"><path d="M11.5 2.4a1 1 0 0 1 1.6 0l4.5 4.5a1 1 0 0 1 0 1.6l-.7.5-3.2-3.2.5-.7-4.1 2.1-1.8 1.8 5 5-1.8 1.8-2.6-2.6-3.9 3.9-1-1 3.9-3.9L4.8 9.9l1.8-1.8 5-5Z"/></svg>
       <span class="chan-badge" hidden></span>
+    </button>
+  </li>
+</template>
+
+<!-- one note under the Notes row; private ones end with a small lock -->
+<template id="tpl-note-item">
+  <li class="chan chan--nested note-item">
+    <button type="button" class="chan-btn">
+      <svg class="ic chan-icon" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2.5h7l3 3v11a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1Z"/><path d="M7.5 9h5M7.5 12h5"/></svg>
+      <span class="chan-name"></span>
+      <svg class="ic row-pin" viewBox="0 0 20 20" width="12" height="12" fill="currentColor" stroke="none" aria-hidden="true"><path d="M11.5 2.4a1 1 0 0 1 1.6 0l4.5 4.5a1 1 0 0 1 0 1.6l-.7.5-3.2-3.2.5-.7-4.1 2.1-1.8 1.8 5 5-1.8 1.8-2.6-2.6-3.9 3.9-1-1 3.9-3.9L4.8 9.9l1.8-1.8 5-5Z"/></svg>
+      <svg class="ic row-lock" viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="Private"><rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/></svg>
     </button>
   </li>
 </template>

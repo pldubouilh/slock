@@ -13,7 +13,7 @@ import (
 	"slock/internal/realtime"
 )
 
-// handleDeleteChannel permanently deletes a named channel: its messages,
+// handleDeleteChannel permanently deletes a named channel or a note: its messages,
 // pins, reactions, memberships and queued pushes go with it (ON DELETE
 // CASCADE), and its files once nothing else uses them. Creator (while they
 // can still read it) or admin, like the other channel settings. The body must
@@ -36,13 +36,16 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) err
 	if err != nil {
 		return err
 	}
-	if basics.Kind != db.KindChannel {
+	if basics.Kind == db.KindDM {
 		return httpx.ErrForbidden
 	}
 	if err := s.requireChannelAdmin(ctx, basics, me); err != nil {
 		return err
 	}
 	if !strings.EqualFold(strings.TrimPrefix(strings.TrimSpace(in.Name), "#"), basics.Name) {
+		if basics.Kind == db.KindNote {
+			return httpx.BadRequest("Type the note's title to confirm.")
+		}
 		return httpx.BadRequest("Type the channel's name to confirm.")
 	}
 
@@ -80,6 +83,8 @@ func (s *Server) handleDeleteChannel(w http.ResponseWriter, r *http.Request) err
 	ev := realtime.Event{Type: "channel.delete", Data: map[string]any{"channel_id": id}}
 	if basics.IsPrivate {
 		s.Hub.PublishUsers(members, ev)
+	} else if basics.Kind == db.KindNote {
+		s.announcePublicNote(ctx, ev)
 	} else {
 		// Everyone who can see a public channel lists it, member or not.
 		s.announcePublicChannel(ctx, basics.Name, ev)

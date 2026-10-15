@@ -59,6 +59,16 @@ strings, so the templates are where message/row structure lives.
                         / app badge and blip; a folded-away, un-surfaced channel
                         does none of that. The section head (with its controls)
                         always stays so the fold can be undone.
+    #notes-row              the Notes row under Latest (.chan-group): clicking
+                        its .chan-btn folds / unfolds #note-list
+                        (localStorage["slock:fold-notes"]; without
+                        .chan-group--open the .notes-chev flips). Folded, only the open note stays.
+                        #new-note-btn (.notes-add, the + at the row end, right
+                        of the chevron) opens the new-note form
+    #note-list              <ul>, JS fills with #tpl-note-item clones: pinned,
+                        then joined, your Personal note first, then by title.
+                        Unjoined public notes follow the "Unjoined channels"
+                        setting
     #channel-list           <ul>, JS fills with #tpl-channel-item clones; a
                         pinned row carries .chan--pinned + a .row-pin glyph
     #dm-list                <ul>, JS fills with #tpl-dm-item clones; .dm--pinned
@@ -113,6 +123,33 @@ strings, so the templates are where message/row structure lives.
     #message-scroll         the scroll container
       #message-loader       "loading older messages" spinner, JS toggles [hidden]
       #message-list         messages go here, oldest first
+    #note-view              an open note, JS toggles [hidden] together with
+                            body.view-note (which hides #message-scroll and
+                            .composer-area); for a note the header's
+                            #channel-topic reads "Private note · Saved"
+                            ("Saving…", "Offline — …") and #mute-btn,
+                            #pins-btn, #files-btn hide. Its --note-w (the
+                            text column's width) is set by JS from
+                            localStorage["slock:note-width"]; .note-resizing
+                            while a grip is dragged
+      #note-sheet           the faint surface behind the text column
+                            (--note-w plus --note-pad each side); hidden on
+                            phones
+      .note-grip            --start / --end: drag handles on the sheet's edges
+                            (pointer drag sets the width, double-click resets);
+                            hidden on phones
+      #note-editor          <textarea>, the note's whole text: plain, the chat
+                            font, centred column. JS rewrites its value when
+                            someone else's edit lands, keeping caret, selection
+                            and scroll; [readonly] while the text loads
+      #note-carets          layer over the editor: one .note-caret per other
+                            person in the note (a bar in their avatar colour,
+                            --caret, with .note-caret-tag naming them; the tag
+                            shows for a few seconds after a move —
+                            .note-caret--fresh — and on hover)
+      #note-mirror          invisible copy of the editor's text and layout,
+                            where caret positions are measured; empty between
+                            renders
     #jump-latest            button, appears when scrolled up
     #typing-indicator       JS sets textContent only (in-flow, line reserved;
                             empty text means nobody is typing)
@@ -169,7 +206,7 @@ left out. Picking inserts `@Display Name `.
 
 A rendered mention of a known person is `span.mention[data-user-id]`
 (`.mention--me` when it is you); in `#message-list` (Latest included) clicking
-it opens that person's DM (your own opens Notes).
+it opens that person's DM (your own opens your Personal note).
 
 ## Templates (in `index.html`, inside `<template>`)
 
@@ -229,6 +266,10 @@ write `textContent` on the avatar element itself — that would delete the image
   `.chan-group--open`; the button carries `aria-expanded`)
   - asterisk `.chan-icon`, `.chan-name` ("bd-*"), `.row-draft`, `.chan-badge`
     (unread of the hidden channels), `.chan-group-chev` (turns when open)
+- `#tpl-note-item` → `.chan.chan--nested.note-item` (dataset.id;
+  `.chan--active`, `.chan--member`, `.chan--pinned`)
+  - document `.chan-icon`, `.chan-name` (the title), `.row-pin`, `.row-lock`
+    (JS toggles `[hidden]`; shown on private notes)
 - `#tpl-dm-item` → `.dm` (dataset.id, dataset.userId; `.dm--active`,
   `.dm--unread`, `.dm--online`)
   - `.dm-avatar`, `.dm-name`, `.dm-badge`, `.dm-presence`

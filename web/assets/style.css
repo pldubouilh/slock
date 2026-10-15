@@ -547,6 +547,24 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 .chan-group--open .chan-group-chev { transform: rotate(90deg); }
 .chan--nested .chan-btn { padding-inline-start: 16px; }
 
+/* the Notes row folds the note list under it; its chevron and + (new note)
+   are the Channels header's: the chevron points down while open and flips
+   when folded, the + sits at the row end */
+#notes-row { position: relative; }
+.notes-chev { flex-shrink: 0; color: var(--text-3); }
+#notes-row:not(.chan-group--open) .notes-chev { transform: rotate(180deg); }
+#notes-row > .chan-btn { padding-inline-end: 36px; }
+.notes-add {
+  position: absolute;
+  inset-inline-end: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 26px;
+  height: 26px;
+}
+/* a private note ends with a small lock */
+.row-lock { flex-shrink: 0; color: var(--text-3); opacity: 0.7; }
+
 .side-list { padding: 0 var(--sp-2); }
 
 .chan-btn, .dm-btn {
@@ -870,6 +888,141 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
    header line as a small tag; the text is clamped to three lines. */
 body.view-latest #composer,
 body.view-latest #typing-indicator { display: none; }
+
+/* ---- an open note (body.view-note): the whole column is one plain text, in
+   the chat's font, set on a comfortable measure with room around it. */
+body.view-note #message-scroll,
+body.view-note .composer-area { display: none; }
+#note-view {
+  /* --note-w: the text column, set by JS from the dragged width.
+     The sheet behind it adds --note-pad on each side and stays 24px clear of
+     the view's edges. */
+  --note-w: 55rem;
+  --note-pad: 40px;
+  --note-sheet-w: min(calc(var(--note-w) + 2 * var(--note-pad)), calc(100% - 48px));
+  position: relative;
+  isolation: isolate;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+#note-editor {
+  flex: 1;
+  min-width: 0;
+  /* Centred column, inset --note-pad inside the sheet. The tall bottom
+     padding lets the last lines scroll up to eye level. */
+  padding: 36px max(calc(24px + var(--note-pad)), calc((100% - var(--note-w)) / 2));
+  background: transparent;
+  border: 0;
+  outline: none;
+  resize: none;
+  color: var(--text-1);
+  font: inherit;
+  font-size: var(--fs-body);
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+#note-editor::placeholder { color: var(--text-3); }
+
+/* The sheet: a faint surface under the text column, edged with hairlines, so
+   the column's limits read at a glance. It never scrolls; the text does. */
+#note-sheet {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: var(--note-sheet-w);
+  transform: translateX(-50%);
+  z-index: -1;
+  background: color-mix(in srgb, var(--bg-1) 65%, transparent);
+  border-inline: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  pointer-events: none;
+  transition: border-color var(--t-fast) var(--ease);
+}
+/* a grip on each sheet edge: a wide invisible hit area, with a short pill that
+   shows on hover and while dragging */
+.note-grip {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  margin-left: -7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.note-grip--start { left: calc(50% - var(--note-sheet-w) / 2); }
+.note-grip--end { left: calc(50% + var(--note-sheet-w) / 2); }
+.note-grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 40px;
+  border-radius: 2px;
+  background: var(--text-3);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.note-grip:hover::after,
+#note-view.note-resizing .note-grip::after { opacity: 0.55; }
+#note-view:has(.note-grip:hover) #note-sheet,
+#note-view.note-resizing #note-sheet { border-color: var(--border-strong); }
+#note-view.note-resizing { cursor: col-resize; user-select: none; }
+
+/* Other people's carets: a bar in their avatar colour (--caret, set by JS),
+   with their name above it for a few seconds after it moves. The layer
+   covers the editor exactly and clips what is scrolled out of view. */
+#note-carets {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.note-caret {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  margin-left: -1px;
+  background: var(--caret);
+  border-radius: 1px;
+}
+.note-caret-tag {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  padding: 1px 5px;
+  border-radius: 4px 4px 4px 0;
+  background: var(--caret);
+  color: #fff;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity var(--t-fast) var(--ease);
+}
+.note-caret--fresh .note-caret-tag,
+#note-view:hover .note-caret-tag { opacity: 1; }
+#note-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  visibility: hidden;
+  box-sizing: border-box;
+  border: 0;
+  pointer-events: none;
+}
+#note-editor:read-only { color: var(--text-3); }
+@media (max-width: 760px) {
+  #note-editor { padding: 20px 16px; }
+  #note-sheet, .note-grip { display: none; }
+}
 .side-list--meta { padding-top: var(--sp-2); }
 
 .msg--latest { cursor: pointer; padding-block: 7px; }

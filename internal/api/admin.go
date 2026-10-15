@@ -131,6 +131,10 @@ func (s *Server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) e
 		}
 	}
 
+	if err := s.DB.CreatePersonalNote(r.Context(), u.ID); err != nil {
+		log.Printf("api: personal note for user %d: %v", u.ID, err)
+	}
+
 	s.sendWelcome(u.Email, u.DisplayName, tempPassword)
 
 	httpx.JSON(w, http.StatusCreated, map[string]any{

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,7 +39,8 @@ type Server struct {
 	Mailer *mail.Mailer
 	Pusher *push.Pusher
 
-	pushKick chan struct{} // nudges the push_queue worker, see StartPushWorker
+	pushKick  chan struct{} // nudges the push_queue worker, see StartPushWorker
+	noteLocks sync.Map      // note id -> *sync.Mutex, see noteLock
 }
 
 func New(cfg Config, database *db.DB, hub *realtime.Hub, m *media.Store, mailer *mail.Mailer, pusher *push.Pusher) *Server {
@@ -95,6 +97,13 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/channels/{id}/mute", s.auth(s.handleSetMute))
 	mux.HandleFunc("POST /api/channels/{id}/typing", s.auth(s.handleTyping))
 	mux.HandleFunc("POST /api/dms", s.auth(s.handleOpenDM))
+
+	// -- notes (channels of kind 'note': the routes above manage them) ----
+	mux.HandleFunc("POST /api/notes", s.auth(s.handleCreateNote))
+	mux.HandleFunc("GET /api/notes/{id}", s.auth(s.handleGetNote))
+	mux.HandleFunc("GET /api/notes/{id}/ops", s.auth(s.handleNoteOps))
+	mux.HandleFunc("POST /api/notes/{id}/ops", s.auth(s.handleNoteEdit))
+	mux.HandleFunc("POST /api/notes/{id}/caret", s.auth(s.handleNoteCaret))
 
 	// -- messages --------------------------------------------------------
 	mux.HandleFunc("GET /api/channels/{id}/messages", s.auth(s.handleListMessages))
@@ -260,8 +269,8 @@ func (s *Server) isMember(ctx context.Context, channelID, userID int64) (bool, e
 }
 
 // requireMembership returns ErrForbidden unless the user is in the channel.
-// Public channels are readable by anyone signed in; private channels and DMs
-// require membership.
+// Public channels and notes are readable by anyone signed in; private ones
+// and DMs require membership.
 func (s *Server) requireMembership(ctx context.Context, channelID int64, user *db.User) error {
 	var kind, name string
 	var private bool
@@ -279,6 +288,12 @@ func (s *Server) requireMembership(ctx context.Context, channelID int64, user *d
 		return httpx.ErrForbidden
 	}
 	if kind == db.KindChannel && !private {
+		return nil
+	}
+	// A public note is open to everyone not limited to an allowlist (whose
+	// list names channels, so a note is never on it: they see notes they are
+	// invited to).
+	if kind == db.KindNote && !private && unrestricted(user) {
 		return nil
 	}
 	member, err := s.isMember(ctx, channelID, user.ID)

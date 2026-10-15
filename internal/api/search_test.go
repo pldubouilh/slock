@@ -79,3 +79,29 @@ func TestTruncateBody(t *testing.T) {
 		t.Errorf("truncateBody missing ellipsis: %q", got)
 	}
 }
+
+func TestNoteSnippet(t *testing.T) {
+	body := "Groceries\n\nBuy MILK and eggs 😀 then milk again"
+	snip, at, n, ok := noteSnippet(body, []string{"milk", "eggs"})
+	if !ok {
+		t.Fatal("no match")
+	}
+	if want := "Groceries Buy <mark>MILK</mark> and <mark>eggs</mark> 😀 then <mark>milk</mark> again"; snip != want {
+		t.Errorf("snippet = %q, want %q", snip, want)
+	}
+	if at != 15 || n != 4 {
+		t.Errorf("at, len = %d, %d", at, n)
+	}
+	if _, _, _, ok := noteSnippet(body, []string{"milk", "bread"}); ok {
+		t.Error("matched without every word")
+	}
+	if _, at, _, _ := noteSnippet("😀 x <b>", []string{"<b>"}); at != 5 {
+		t.Errorf("utf-16 offset = %d, want 5", at)
+	}
+	if s, _, _, _ := noteSnippet("a <b> c", []string{"<b>"}); s != "a <mark>&lt;b&gt;</mark> c" {
+		t.Errorf("not escaped: %q", s)
+	}
+	if likeEscape(`50%_\`) != `50\%\_\\` {
+		t.Error("likeEscape")
+	}
+}

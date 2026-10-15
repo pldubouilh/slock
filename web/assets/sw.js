@@ -84,6 +84,10 @@ function offlineReadable(url) {
   // stay online-only: they are meaningless without the live list they hang
   // off — and since lookups ignore the query string, storing one would let it
   // be served offline as the channel's newest page.
+  // A note's whole text: the page keeps every note it can open stored here
+  // (see "notes offline" in app.js), and an older copy is still a good start —
+  // edits since are fetched as ops once the stream is back.
+  if (/^\/api\/notes\/\d+$/.test(url.pathname)) return true;
   if (/^\/api\/channels\/\d+\/messages$/.test(url.pathname)) {
     return !url.searchParams.has('before') && !url.searchParams.has('after')
       && !url.searchParams.has('around');

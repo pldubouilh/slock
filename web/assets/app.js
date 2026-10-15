@@ -211,6 +211,8 @@ const LS = {
   pinnedChans: 'slock:pinned-channels',
   foldChans: 'slock:fold-channels',
   foldDMs: 'slock:fold-dms',
+  foldNotes: 'slock:fold-notes',     // '1' = the Notes row is folded
+  noteW: 'slock:note-width',         // px width of a note's text column (desktop)
   groupChans: 'slock:group-channels', // '1' = fold channels by name prefix
   showUnjoined: 'slock:show-unjoined', // '1' = list channels you are not in
   sound: 'slock:sound',
@@ -246,39 +248,17 @@ function isMuted(ch) {
   return !!(ch && ch.muted);
 }
 
-// Notes is your DM with yourself (the server already supports a one-member
-// "N:N" DM). It gets a fixed sidebar row under Latest instead of a spot in the
-// DM list, and is called "Notes" everywhere.
+// The old Notes: your DM with yourself (a one-member "N:N" DM). Its text now
+// lives in your Personal note (migration 0013), so it is kept out of the DM
+// list; it still names itself "Notes" wherever it turns up (search results).
 function isNotesChannel(ch) {
   return !!(ch && ch.kind === 'dm' && state.me && ch.peer_user_id === state.me.id);
-}
-
-function notesChannel() {
-  for (const ch of state.channels.values()) {
-    if (isNotesChannel(ch)) return ch;
-  }
-  return null;
-}
-
-// Open Notes, creating the self-DM on first use.
-async function openNotes() {
-  const existing = notesChannel();
-  if (existing) {
-    reopenDM(existing.id); // in case it was closed from the DM list before Notes existed
-    openChannel(existing.id);
-    return;
-  }
-  if (!state.me || blockedOffline('Notes')) return;
-  try {
-    const data = await api('/api/dms', { method: 'POST', body: { user_id: state.me.id } });
-    mergeChannel(data.channel);
-    openChannel(data.channel.id);
-  } catch { /* toasted */ }
 }
 
 function channelDisplayName(ch) {
   if (!ch) return '';
   if (isNotesChannel(ch)) return 'Notes';
+  if (ch.kind === 'note') return ch.name;
   if (ch.kind === 'dm') {
     const peer = state.users.get(ch.peer_user_id);
     return peer ? peer.display_name : 'Direct message';
@@ -301,7 +281,7 @@ function mergeChannel(ch) {
 function setChannels(data, startedAt) {
   const seen = new Set();
   let reopened = false;
-  for (const ch of [...(data.channels || []), ...(data.dms || [])]) {
+  for (const ch of [...(data.channels || []), ...(data.dms || []), ...(data.notes || [])]) {
     const prev = state.channels.get(ch.id);
     if (prev && startedAt && readMayPostdate(ch.id, startedAt)) {
       ch.unread_count = prev.unread_count || 0;
@@ -370,17 +350,19 @@ async function refetchChannels() {
     const data = await api('/api/channels', { toast: false });
     setChannels(data, startedAt);
     // setChannels keeps the open channel even when the list no longer has it.
-    // For a named channel that means it is gone — deleted while this client
+    // For a named channel or a note that means it is gone — deleted while this client
     // was not listening, or no longer allowed — so move off it rather than sit
     // on a channel every fetch refuses. (A DM can be legitimately unlisted.)
     const cur = state.channels.get(state.currentId);
-    if (cur && cur.kind === 'channel' && !(data.channels || []).some((c) => c.id === cur.id)) {
+    const listed = cur && (cur.kind === 'note' ? data.notes : data.channels);
+    if (cur && cur.kind !== 'dm' && !(listed || []).some((c) => c.id === cur.id)) {
       dropDeletedChannel(cur.id, { gone: true });
     }
     renderSidebar();
     renderChannelHeader();
     updateBadges();
     maybeMarkRead(); // reading the open channel now covers anything it brought
+    prefetchNotes(); // keep every note readable offline
   } catch (err) {
     if (err.code !== 'network') console.warn('channel refetch failed', err);
   }
@@ -422,13 +404,15 @@ function sortedChannels() {
       || (b.is_member - a.is_member) || a.name.localeCompare(b.name));
 }
 
-// A private channel you're no longer in is gone for good — you cannot see or
+// A private channel (or note) you're no longer in is gone for good — you cannot see or
 // reopen it. Forget it locally and, if you were viewing it, move to another.
 function forgetPrivateChannel(channelId) {
   const ch = state.channels.get(channelId);
-  if (!ch || ch.kind !== 'channel' || !ch.is_private || ch.is_member) return;
+  if (!ch || ch.kind === 'dm' || !ch.is_private || ch.is_member) return;
   state.channels.delete(channelId);
   state.chan.delete(channelId);
+  noteSessions.delete(channelId);
+  forgetNoteOffline(channelId);
   if (state.currentId === channelId) {
     state.currentId = null;
     const next = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
@@ -445,19 +429,23 @@ function dropDeletedChannel(channelId, opts = {}) {
   if (!ch) return;
   state.channels.delete(channelId);
   state.chan.delete(channelId);
+  noteSessions.delete(channelId);
+  noteCarets.delete(channelId);
+  forgetNoteOffline(channelId);
   mentionedChans.delete(channelId);
   if (isChannelPinned(channelId)) togglePinChannel(channelId, { quiet: true });
   writeOutbox(readOutbox().filter((e) => e.channel_id !== channelId));
   if (state.currentId === channelId) {
     state.currentId = null;
+    setNoteView(false);
     // Its half-typed text must not follow into the next channel.
     const ta = byId('composer-input');
     if (ta) { ta.value = ''; autogrow(); }
     const next = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
     if (next) openChannel(next.id);
     else renderChannelHeader();
-    if (opts.gone) toast(`#${ch.name} is no longer available`);
-    else if (!opts.mine) toast(`#${ch.name} was deleted`);
+    if (opts.gone) toast(`${chanLabel(ch)} is no longer available`);
+    else if (!opts.mine) toast(`${chanLabel(ch)} was deleted`);
   }
   if (state.latest) loadLatest(); // it may have been showing that channel's messages
   persistDrafts();
@@ -571,12 +559,7 @@ function renderSidebar() {
       dmList.append(li);
     }
   }
-  const notesRow = byId('notes-row');
-  if (notesRow) {
-    const notes = notesChannel();
-    notesRow.classList.toggle('chan--active', isNotesChannel(state.channels.get(state.currentId)));
-    notesRow.classList.toggle('chan--draft', !!notes && notes.id !== state.currentId && hasDraft(notes.id));
-  }
+  renderNoteList();
   // Pins come and go (and channels load after prefs): keep the header pin
   // toggles in step.
   reflectFoldButton('channel');
@@ -1509,10 +1492,22 @@ async function openChannel(channelId, opts = {}) {
   document.body.classList.remove('nav-open');
   closeEmojiPicker();
   closeHeaderMenu();
+  if (ch.kind === 'note') {
+    // A note has no composer: the text typed in the last channel must not
+    // become this note's draft (saveDraftFor reads the composer on leaving).
+    const composer = byId('composer-input');
+    if (composer) { composer.value = ''; autogrow(); }
+  } else {
+    setNoteView(false);
+  }
 
   renderSidebar();
   renderChannelHeader();
   updateBadges(); // what counts toward the title depends on what's open
+  if (ch.kind === 'note') {
+    await showNote(ch, opts);
+    return;
+  }
 
   const st = chanState(channelId);
   // Not loaded, or a detached window opened plainly (not to jump somewhere):
@@ -1668,6 +1663,7 @@ async function openLatest(opts = {}) {
     flushMarkRead();
   }
   state.currentId = null;
+  setNoteView(false);
   setLatestView(true);
   resetComposerMode();
   rememberInPalette({ t: 'latest' });
@@ -1942,7 +1938,7 @@ function renderChannelHeader() {
   const title = byId('channel-title');
   const topic = byId('channel-topic');
   if (title) title.textContent = ch ? channelDisplayName(ch) : '';
-  setHidden(byId('title-lock'), !(ch && ch.kind === 'channel' && ch.is_private));
+  setHidden(byId('title-lock'), !(ch && ch.kind !== 'dm' && ch.is_private));
   if (topic) {
     // Inline next to the title; hidden whenever there is nothing to show
     // (DMs never have a topic).
@@ -1952,8 +1948,12 @@ function renderChannelHeader() {
   }
 
   const isDM = ch && ch.kind === 'dm';
+  const isNote = !!ch && ch.kind === 'note';
   const joinBtn = byId('join-btn');
-  if (joinBtn) joinBtn.hidden = !ch || isDM || ch.is_member;
+  if (joinBtn) {
+    joinBtn.hidden = !ch || isDM || ch.is_member;
+    joinBtn.textContent = isNote ? 'Join note' : 'Join channel';
+  }
   const membersBtn = byId('members-btn');
   if (membersBtn) membersBtn.hidden = !ch || isDM;
   const muteBtn = byId('mute-btn');
@@ -1986,11 +1986,11 @@ function renderChannelHeader() {
   const closeBtn = byId('close-dm-btn');
   if (closeBtn) closeBtn.hidden = !isDM;
 
-  // Notes: nothing to mute (it never notifies), pin (it has its own row) or
-  // close (ditto).
-  if (isNotesChannel(ch)) {
-    if (topic) { topic.textContent = 'Only you can see these'; topic.hidden = false; }
-    for (const b of [muteBtn, pinChanBtn, closeBtn]) if (b) b.hidden = true;
+  // A note: no messages, so nothing to mute, no pins and no files; the topic
+  // line says who can see it and whether your typing is saved.
+  if (isNote) {
+    for (const b of [muteBtn, pinsBtn, filesBtn]) if (b) b.hidden = true;
+    renderNoteStatus();
   }
 
   // The Latest meta-channel: no channel behind it (every button above hid
@@ -2001,10 +2001,923 @@ function renderChannelHeader() {
     if (infoBtn) infoBtn.hidden = false;
   }
   if (infoBtn) {
-    infoBtn.title = state.latest ? 'Latest details' : 'Channel details';
+    infoBtn.title = state.latest ? 'Latest details' : isNote ? 'Note details' : 'Channel details';
     infoBtn.setAttribute('aria-label', infoBtn.title);
   }
 }
+
+/* ============================================================ notes
+   A note is a channel of kind 'note' (it sits in state.channels like any
+   other, so pins, members, privacy, rename and delete work as for channels)
+   holding no messages but one plain text that several people edit at once.
+
+   Edits travel as text operations, the ot.js form the server's
+   internal/textop speaks: an array walking the whole text, where a positive
+   number keeps that many characters, a negative one deletes that many and a
+   string inserts itself. Lengths are UTF-16 units — JS string lengths.
+
+   Each note being edited has a session: the text as this client has it, the
+   server revision it is based on, at most one edit in flight and what was
+   typed since (buffered, composed into one edit). The server applies edits
+   one after another and streams each as note.op with its revision, in order:
+   ours comes back as the acknowledgement, anyone else's is rebased over what
+   the server has not confirmed yet (opTransform) and applied, and the
+   textarea keeps its caret. A gap in the revisions is fetched from the
+   note's log. */
+
+const isRetain = (c) => typeof c === 'number' && c > 0;
+const isDeleteC = (c) => typeof c === 'number' && c < 0;
+const isInsertC = (c) => typeof c === 'string';
+
+function opRetain(op, n) {
+  if (n <= 0) return op;
+  const k = op.length;
+  if (k && isRetain(op[k - 1])) op[k - 1] += n;
+  else op.push(n);
+  return op;
+}
+
+// An insert next to a delete goes before it, so one edit has one spelling
+// (the server normalises the same way).
+function opInsert(op, s) {
+  if (!s) return op;
+  const k = op.length;
+  if (k && isInsertC(op[k - 1])) op[k - 1] += s;
+  else if (k && isDeleteC(op[k - 1])) {
+    if (k > 1 && isInsertC(op[k - 2])) op[k - 2] += s;
+    else { op.push(op[k - 1]); op[k - 1] = s; }
+  } else op.push(s);
+  return op;
+}
+
+function opDelete(op, n) {
+  if (n <= 0) return op;
+  const k = op.length;
+  if (k && isDeleteC(op[k - 1])) op[k - 1] -= n;
+  else op.push(-n);
+  return op;
+}
+
+function opBaseLen(op) {
+  let n = 0;
+  for (const c of op) if (typeof c === 'number') n += Math.abs(c);
+  return n;
+}
+
+function opTargetLen(op) {
+  let n = 0;
+  for (const c of op) n += isInsertC(c) ? c.length : isRetain(c) ? c : 0;
+  return n;
+}
+
+function opApply(op, doc) {
+  if (opBaseLen(op) !== doc.length) throw new Error('note: edit does not fit the text');
+  let out = '';
+  let i = 0;
+  for (const c of op) {
+    if (isRetain(c)) { out += doc.slice(i, i + c); i += c; }
+    else if (isInsertC(c)) out += c;
+    else i -= c;
+  }
+  return out;
+}
+
+// The edit turning a into b, as one changed span (what an input event makes),
+// never cutting a surrogate pair (an emoji) in two.
+function opFromDiff(a, b) {
+  const max = Math.min(a.length, b.length);
+  let p = 0;
+  while (p < max && a.charCodeAt(p) === b.charCodeAt(p)) p++;
+  if (p > 0 && (a.charCodeAt(p - 1) & 0xfc00) === 0xd800) p--;
+  let s = 0;
+  while (s < max - p && a.charCodeAt(a.length - 1 - s) === b.charCodeAt(b.length - 1 - s)) s++;
+  if (s > 0 && (a.charCodeAt(a.length - s) & 0xfc00) === 0xdc00) s--;
+  const op = [];
+  opRetain(op, p);
+  opInsert(op, b.slice(p, b.length - s));
+  opDelete(op, a.length - p - s);
+  opRetain(op, s);
+  return op;
+}
+
+// a then b, as one edit.
+function opCompose(a, b) {
+  if (opTargetLen(a) !== opBaseLen(b)) throw new Error('note: edits do not chain');
+  const out = [];
+  let i = 0, j = 0;
+  let x = a[i++], y = b[j++];
+  while (x !== undefined || y !== undefined) {
+    if (isDeleteC(x)) { opDelete(out, -x); x = a[i++]; continue; }
+    if (isInsertC(y)) { opInsert(out, y); y = b[j++]; continue; }
+    if (x === undefined || y === undefined) throw new Error('note: edits do not chain');
+    if (isRetain(x) && isRetain(y)) {
+      const n = Math.min(x, y);
+      opRetain(out, n); x -= n; y -= n;
+    } else if (isInsertC(x) && isDeleteC(y)) {
+      const n = Math.min(x.length, -y);
+      x = x.slice(n); y += n;
+    } else if (isInsertC(x) && isRetain(y)) {
+      const n = Math.min(x.length, y);
+      opInsert(out, x.slice(0, n)); x = x.slice(n); y -= n;
+    } else { // x retains, y deletes
+      const n = Math.min(x, -y);
+      opDelete(out, n); x -= n; y += n;
+    }
+    if (!x) x = a[i++];
+    if (!y) y = b[j++];
+  }
+  return out;
+}
+
+// Two edits made against the same text, rebased over each other: returns
+// [a2, b2] where a then b2 equals b then a2. On a tie (both insert at one
+// spot) a's text comes first — the same rule as the server's, which always
+// passes the edit it is receiving as a, as we pass ours.
+function opTransform(a, b) {
+  if (opBaseLen(a) !== opBaseLen(b)) throw new Error('note: edits do not match');
+  const a2 = [], b2 = [];
+  let i = 0, j = 0;
+  let x = a[i++], y = b[j++];
+  while (x !== undefined || y !== undefined) {
+    if (isInsertC(x)) { opInsert(a2, x); opRetain(b2, x.length); x = a[i++]; continue; }
+    if (isInsertC(y)) { opRetain(a2, y.length); opInsert(b2, y); y = b[j++]; continue; }
+    if (x === undefined || y === undefined) throw new Error('note: edits do not match');
+    if (isRetain(x) && isRetain(y)) {
+      const n = Math.min(x, y);
+      opRetain(a2, n); opRetain(b2, n); x -= n; y -= n;
+    } else if (isDeleteC(x) && isDeleteC(y)) {
+      const n = Math.min(-x, -y); // both removed it: nothing left to do
+      x += n; y += n;
+    } else if (isDeleteC(x)) { // y retains
+      const n = Math.min(-x, y);
+      opDelete(a2, n); x += n; y -= n;
+    } else { // x retains, y deletes
+      const n = Math.min(x, -y);
+      opDelete(b2, n); x -= n; y += n;
+    }
+    if (!x) x = a[i++];
+    if (!y) y = b[j++];
+  }
+  return [a2, b2];
+}
+
+// Where position idx ends up after op: text inserted before it pushes it
+// right, text deleted before it pulls it left. An insert right at idx stays
+// after it, so someone typing where your caret is does not move your caret.
+function opShiftIndex(op, idx) {
+  let pos = 0;
+  let out = idx;
+  for (const c of op) {
+    if (pos >= idx) break;
+    if (isRetain(c)) pos += c;
+    else if (isInsertC(c)) out += c.length;
+    else { out -= Math.min(-c, idx - pos); pos -= c; }
+  }
+  return out;
+}
+
+// The reverse: where position idx of the text after op was before it. A
+// position inside text op inserted maps to where that text went in.
+function opUnshiftIndex(op, idx) {
+  let base = 0;
+  let after = 0;
+  for (const c of op) {
+    if (isRetain(c)) {
+      if (idx <= after + c) return base + (idx - after);
+      base += c;
+      after += c;
+    } else if (isInsertC(c)) {
+      if (idx <= after + c.length) return base;
+      after += c.length;
+    } else {
+      base -= c;
+    }
+  }
+  return base;
+}
+
+const NOTE_SEND_MS = 250;     // typing is sent in bursts this far apart
+const noteSessions = new Map(); // note id -> session (see noteSession)
+let noteViewId = 0;          // the note on screen, 0 when none
+
+function noteSession(id) {
+  let s = noteSessions.get(id);
+  if (!s) {
+    s = {
+      id, rev: 0, doc: '', loaded: false, seq: 0,
+      inflight: null,   // {op (rebased as others' edits land), sent, base, clientOp}
+      buffer: null,     // typed since, not sent yet
+      waiting: new Map(), // rev -> note.op frame that arrived ahead of its turn
+      history: new Map(), // rev -> the edit that made it (for shifting carets)
+      timer: 0, gapTimer: 0, retryMs: 0, fetching: false, failing: false,
+    };
+    noteSessions.set(id, s);
+  }
+  return s;
+}
+
+const noteBusy = (s) => !!(s.inflight || s.buffer);
+
+// A session nobody is looking at keeps going only while it has edits to
+// deliver; then it goes, and the note is fetched fresh when next opened.
+function retireNoteSession(s) {
+  if (noteViewId !== s.id && !noteBusy(s)) {
+    clearTimeout(s.timer);
+    clearTimeout(s.gapTimer);
+    noteSessions.delete(s.id);
+  }
+}
+
+function noteEditor() { return byId('note-editor'); }
+
+function setNoteView(on) {
+  document.body.classList.toggle('view-note', on);
+  setHidden(byId('note-view'), !on);
+  if (!on && noteViewId) {
+    const s = noteSessions.get(noteViewId);
+    sendNoteCaretGone(noteViewId);
+    noteViewId = 0;
+    const layer = byId('note-carets');
+    if (layer) layer.textContent = '';
+    if (s) { flushNoteEdits(s); retireNoteSession(s); }
+  }
+}
+
+// Open note ch in the main column. Its text is fetched fresh unless this
+// client still has edits of it on their way (then what it holds is newer).
+async function showNote(ch, opts = {}) {
+  if (noteViewId !== ch.id) setNoteView(false); // the previous note sends what it has
+  const s = noteSession(ch.id);
+  noteViewId = ch.id;
+  setNoteView(true);
+  renderNoteStatus();
+  const ta = noteEditor();
+  if (!ta) return;
+  if (s.loaded && noteBusy(s)) {
+    paintNote(s, { reset: true });
+    sendNoteCaret(true);
+    scheduleCaretRender();
+  } else {
+    ta.value = '';
+    ta.readOnly = true; // nothing to edit until the text is here
+    await loadNote(s);
+    if (noteViewId !== ch.id) return;
+  }
+  renderChannelHeader();
+  const desktop = matchMedia('(min-width: 700px)').matches;
+  if (!opts.noFocus && desktop) ta.focus();
+  if (opts.noteMatch) revealNoteMatch(ta, opts.noteMatch, desktop);
+}
+
+// Open a note on a search hit: select the match and scroll it to the upper
+// third. The server said where it was ({at, len}, UTF-16 like the editor); if
+// the text has moved since, the first occurrence of any searched word is
+// used instead.
+function revealNoteMatch(ta, { at, len, words }, focus) {
+  const text = ta.value;
+  const lower = text.toLowerCase();
+  let start = -1;
+  let end = -1;
+  if (words.includes(lower.slice(at, at + len))) {
+    start = at;
+    end = at + len;
+  } else {
+    for (const w of words) {
+      const i = lower.indexOf(w);
+      if (i >= 0 && (start < 0 || i < start)) { start = i; end = i + w.length; }
+    }
+  }
+  if (start < 0) return;
+  if (focus) ta.focus();
+  ta.setSelectionRange(start, end);
+  const mirror = byId('note-mirror');
+  if (!mirror) return;
+  syncNoteMirror(ta, mirror);
+  mirror.textContent = text.slice(0, start);
+  const mark = document.createElement('span');
+  mirror.append(mark);
+  ta.scrollTop = Math.max(0, mark.offsetTop - ta.clientHeight / 3);
+  mirror.textContent = '';
+  scheduleCaretRender();
+}
+
+async function loadNote(s) {
+  const seq = ++s.seq;
+  let data;
+  try {
+    data = await api(`/api/notes/${s.id}`, { toast: false });
+  } catch (err) {
+    if (seq !== s.seq) return;
+    if (noteViewId === s.id && err.code !== 'network') toast(err.message, true);
+    s.failing = err.code === 'network'; // shown in the header; a reconnect retries
+    renderChannelHeader();
+    return;
+  }
+  if (seq !== s.seq) return;
+  const n = data.note;
+  s.doc = n.body;
+  s.rev = n.rev;
+  s.history.clear();
+  s.loaded = true;
+  s.failing = false;
+  for (const r of [...s.waiting.keys()]) if (r <= s.rev) s.waiting.delete(r);
+  paintNote(s, { reset: true });
+  drainNoteOps(s);
+  scheduleNoteStore(s);
+  if (noteViewId === s.id) { sendNoteCaret(true); scheduleCaretRender(); }
+}
+
+// Put the session's text in the editor. `reset` is a fresh open: like a
+// channel, it opens at the end — the latest lines in view, the caret after
+// them — so a long note isn't one long scroll down to where you write.
+// Otherwise `op` is someone else's edit just applied, and the caret and
+// selection move with the text around them.
+function paintNote(s, { reset = false, op = null } = {}) {
+  const ta = noteEditor();
+  if (!ta || noteViewId !== s.id) return;
+  if (reset) {
+    ta.value = s.doc;
+    ta.readOnly = false;
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.scrollTop = ta.scrollHeight;
+    return;
+  }
+  const top = ta.scrollTop;
+  const dir = ta.selectionDirection;
+  const start = op ? opShiftIndex(op, ta.selectionStart) : ta.selectionStart;
+  const end = op ? opShiftIndex(op, ta.selectionEnd) : ta.selectionEnd;
+  ta.value = s.doc;
+  ta.setSelectionRange(start, end, dir);
+  ta.scrollTop = top;
+}
+
+// Whatever was typed in the editor since we last looked becomes an edit.
+function captureNoteInput(s) {
+  const ta = noteEditor();
+  if (!ta || noteViewId !== s.id || !s.loaded || ta.readOnly) return;
+  const text = ta.value;
+  if (text === s.doc) return;
+  const op = opFromDiff(s.doc, text);
+  s.doc = text;
+  s.buffer = s.buffer ? opCompose(s.buffer, op) : op;
+  scheduleNoteSend(s);
+  renderNoteStatus();
+  scheduleCaretRender();
+}
+
+function scheduleNoteSend(s, delay = NOTE_SEND_MS) {
+  if (s.timer || s.inflight || !s.buffer) return;
+  s.timer = setTimeout(() => { s.timer = 0; sendNoteEdit(s); }, delay);
+}
+
+// Send now what is waiting for the burst timer (leaving the note, the page).
+function flushNoteEdits(s) {
+  if (!s.timer) return;
+  clearTimeout(s.timer);
+  s.timer = 0;
+  sendNoteEdit(s);
+}
+
+function sendNoteEdit(s) {
+  if (s.inflight || !s.buffer) return;
+  s.inflight = { op: s.buffer, sent: s.buffer, base: s.rev, clientOp: sendId() };
+  s.buffer = null;
+  postNoteEdit(s);
+}
+
+// POST the edit in flight. It is acknowledged by its own note.op frame, in
+// revision order; the response only says which revision it became, so a
+// stream that is down or behind gets topped up from the log. A failed send is
+// retried as it was first sent (same base, same client_op — the server
+// rebases it, and applies it once however often it arrives).
+function postNoteEdit(s) {
+  const f = s.inflight;
+  if (!f) return;
+  api(`/api/notes/${s.id}/ops`, {
+    method: 'POST', toast: false,
+    body: { base_rev: f.base, client_op: f.clientOp, op: f.sent },
+  }).then((data) => {
+    s.retryMs = 0;
+    s.failing = false;
+    renderNoteStatus();
+    if (s.inflight === f && s.rev < data.rev) {
+      setTimeout(() => { if (s.inflight === f) fetchNoteOps(s); }, 1500);
+    }
+  }).catch((err) => {
+    if (s.inflight !== f) return;
+    if (err.code === 'network' || (err.status || 0) >= 500) {
+      s.failing = true;
+      renderNoteStatus();
+      s.retryMs = Math.min(Math.max(1000, s.retryMs * 2), 15000);
+      setTimeout(() => { if (s.inflight === f) postNoteEdit(s); }, s.retryMs);
+      return;
+    }
+    // Refused for good (the note is gone, access went, or the edit no longer
+    // fits): start over from the server's text.
+    toast(err.message || 'This note could not be saved', true);
+    resetNoteSession(s);
+  });
+}
+
+// Drop this client's view of the note and fetch it again (unsent edits go).
+function resetNoteSession(s) {
+  clearTimeout(s.timer);
+  clearTimeout(s.gapTimer);
+  s.timer = s.gapTimer = 0;
+  s.inflight = s.buffer = null;
+  s.waiting.clear();
+  s.loaded = false;
+  if (noteViewId === s.id) {
+    const ta = noteEditor();
+    if (ta) ta.readOnly = true;
+    loadNote(s);
+  } else {
+    noteSessions.delete(s.id);
+  }
+  renderNoteStatus();
+}
+
+// A note.op frame from the stream (or the log).
+function onNoteOp(ev) {
+  const ch = state.channels.get(ev.channel_id);
+  if (ch && ev.rev > (ch.note_rev || 0)) ch.note_rev = ev.rev;
+  const s = noteSessions.get(ev.channel_id);
+  if (!s || !s.loaded) schedulePrefetchNotes(); // its offline copy is behind now
+  if (!s || ev.rev <= s.rev) return;
+  s.waiting.set(ev.rev, ev);
+  if (s.loaded) drainNoteOps(s);
+}
+
+function drainNoteOps(s) {
+  let ev;
+  while ((ev = s.waiting.get(s.rev + 1))) {
+    s.waiting.delete(ev.rev);
+    try {
+      applyNoteOp(s, ev);
+    } catch (err) {
+      console.warn(err);
+      resetNoteSession(s);
+      return;
+    }
+  }
+  for (const r of [...s.waiting.keys()]) if (r <= s.rev) s.waiting.delete(r);
+  // A gap: frames can overtake each other, or a slow stream dropped one.
+  // Unless the missing edit turns up shortly, fetch it.
+  clearTimeout(s.gapTimer);
+  s.gapTimer = s.waiting.size ? setTimeout(() => fetchNoteOps(s), 400) : 0;
+  retireNoteSession(s);
+}
+
+function applyNoteOp(s, ev) {
+  captureNoteInput(s); // the editor and s.doc must agree before rebasing
+  s.rev = ev.rev;
+  scheduleNoteStore(s);
+  s.history.set(ev.rev, ev.op);
+  s.history.delete(ev.rev - NOTE_HISTORY_KEPT);
+  if (s.inflight && ev.client_op && ev.client_op === s.inflight.clientOp) {
+    s.inflight = null;
+    scheduleNoteSend(s); // what was typed meanwhile goes next
+    renderNoteStatus();
+    return;
+  }
+  let op = ev.op;
+  if (s.inflight) [s.inflight.op, op] = opTransform(s.inflight.op, op);
+  if (s.buffer) [s.buffer, op] = opTransform(s.buffer, op);
+  s.doc = opApply(op, s.doc);
+  paintNote(s, { op });
+  scheduleCaretRender();
+}
+
+// Catch up from the note's log: everything after the revision we are at.
+async function fetchNoteOps(s) {
+  clearTimeout(s.gapTimer);
+  s.gapTimer = 0;
+  if (s.fetching || !s.loaded) return;
+  s.fetching = true;
+  try {
+    const data = await api(`/api/notes/${s.id}/ops?since=${s.rev}`, { toast: false });
+    for (const ev of data.ops) if (ev.rev > s.rev) s.waiting.set(ev.rev, ev);
+  } catch (err) {
+    s.fetching = false;
+    if (err.status === 409) {
+      toast('This note changed a lot meanwhile: reloaded.');
+      resetNoteSession(s);
+    } else if (err.status === 403 || err.status === 404) {
+      resetNoteSession(s);
+    }
+    return; // offline: the reconnect catches up
+  }
+  s.fetching = false;
+  drainNoteOps(s);
+}
+
+// After the stream was down: catch every live session up.
+function resyncNotes() {
+  for (const s of noteSessions.values()) {
+    if (s.loaded) fetchNoteOps(s);
+    else if (noteViewId === s.id) loadNote(s);
+  }
+  if (noteViewId) sendNoteCaret(true); // others may have dropped our caret meanwhile
+}
+
+// "Saving…" while edits are on their way, "Offline" while they cannot be.
+function noteStatusText() {
+  const s = noteSessions.get(state.currentId);
+  if (!s) return 'Loading…';
+  if (!s.loaded) return s.failing ? 'Offline' : 'Loading…';
+  if (s.failing) return 'Offline — your changes will be saved';
+  return noteBusy(s) ? 'Saving…' : 'Saved';
+}
+
+function renderNoteStatus() {
+  const ch = state.channels.get(state.currentId);
+  const topic = byId('channel-topic');
+  if (!ch || ch.kind !== 'note' || !topic) return;
+  topic.textContent = `${ch.is_private ? 'Private' : 'Public'} note · ${noteStatusText()}`;
+  topic.hidden = false;
+}
+
+/* -------- other people's carets in a note
+   Each client says where its caret is (POST /caret, throttled, and again every
+   CARET_BEAT_MS while the note stays open, so a reader who is not moving
+   stays visible), in the coordinates of the server text at its revision: its
+   own unconfirmed typing is unshifted out first. Receivers shift the position
+   through the edits since (kept in s.history) and through their own
+   unconfirmed typing, then draw a coloured bar with the person's name. Where
+   the bar goes is measured on #note-mirror, an invisible copy of the editor's
+   text laid out exactly like it. */
+
+const NOTE_HISTORY_KEPT = 200; // edits remembered per note for shifting carets
+const CARET_SEND_MS = 200;
+const CARET_BEAT_MS = 25000;
+const CARET_TTL_MS = 70000;    // no word from someone this long: they left
+const CARET_TAG_MS = 4000;     // the name shows this long after a move
+const noteCarets = new Map();  // note id -> Map(user id -> {rev, start, end, at, movedAt})
+let caretSendTimer = 0;
+let caretBeatTimer = 0;
+let caretFrame = 0;
+let caretSent = { id: 0, key: '', at: 0 };
+
+// What this client typed that the server has not applied yet, as one edit
+// from the text at s.rev to s.doc (null when there is none).
+function notePending(s) {
+  if (s.inflight && s.buffer) return opCompose(s.inflight.op, s.buffer);
+  return s.inflight ? s.inflight.op : s.buffer;
+}
+
+function sendNoteCaret(now = false) {
+  if (!now) {
+    if (!caretSendTimer) caretSendTimer = setTimeout(() => { caretSendTimer = 0; sendNoteCaret(true); }, CARET_SEND_MS);
+    return;
+  }
+  clearTimeout(caretSendTimer);
+  caretSendTimer = 0;
+  const s = noteSessions.get(noteViewId);
+  const ta = noteEditor();
+  if (!s || !s.loaded || !ta || !state.connected) return;
+  const pending = notePending(s);
+  const unshift = (i) => (pending ? opUnshiftIndex(pending, i) : i);
+  const body = { rev: s.rev, start: unshift(ta.selectionStart), end: unshift(ta.selectionEnd) };
+  const key = `${body.rev}:${body.start}:${body.end}`;
+  if (caretSent.id === s.id && caretSent.key === key && Date.now() - caretSent.at < CARET_BEAT_MS - 1000) return;
+  caretSent = { id: s.id, key, at: Date.now() };
+  api(`/api/notes/${s.id}/caret`, { method: 'POST', toast: false, body }).catch(() => {});
+  clearTimeout(caretBeatTimer);
+  caretBeatTimer = setTimeout(() => sendNoteCaret(true), CARET_BEAT_MS);
+}
+
+// Leaving a note: take our caret off everyone's screen.
+function sendNoteCaretGone(id) {
+  clearTimeout(caretSendTimer);
+  clearTimeout(caretBeatTimer);
+  caretSendTimer = caretBeatTimer = 0;
+  caretSent = { id: 0, key: '', at: 0 };
+  if (!state.connected) return;
+  api(`/api/notes/${id}/caret`, { method: 'POST', toast: false, body: { rev: 0, start: -1, end: -1 } }).catch(() => {});
+}
+
+function onNoteCaret(ev) {
+  if (state.me && ev.user_id === state.me.id) return; // our other tabs
+  let carets = noteCarets.get(ev.channel_id);
+  if (!carets) { carets = new Map(); noteCarets.set(ev.channel_id, carets); }
+  if (ev.start < 0) {
+    carets.delete(ev.user_id);
+  } else {
+    const prev = carets.get(ev.user_id);
+    const now = Date.now();
+    const moved = !prev || prev.rev !== ev.rev || prev.start !== ev.start || prev.end !== ev.end;
+    carets.set(ev.user_id, {
+      rev: ev.rev, start: ev.start, end: ev.end, at: now,
+      movedAt: moved ? now : prev.movedAt,
+    });
+    if (moved) setTimeout(scheduleCaretRender, CARET_TAG_MS + 50); // the name fades
+    setTimeout(scheduleCaretRender, CARET_TTL_MS + 100); // or the caret, if it falls silent
+  }
+  if (ev.channel_id === noteViewId) scheduleCaretRender();
+}
+
+// Where a caret reported at revision c.rev is in the editor now, or null
+// while it cannot be placed (we are behind it, or it predates what we hold).
+function caretInEditor(s, c, pending) {
+  if (c.rev > s.rev) return null;
+  let pos = c.end;
+  for (let r = c.rev + 1; r <= s.rev; r++) {
+    const op = s.history.get(r);
+    if (!op) return null;
+    pos = opShiftIndex(op, pos);
+  }
+  if (pending) pos = opShiftIndex(pending, pos);
+  return Math.max(0, Math.min(pos, s.doc.length));
+}
+
+function scheduleCaretRender() {
+  if (!caretFrame && noteViewId) caretFrame = requestAnimationFrame(renderNoteCarets);
+}
+
+// The mirror copies what decides where text wraps: the box's inner width,
+// padding, and every font setting.
+function syncNoteMirror(ta, mirror) {
+  const cs = getComputedStyle(ta);
+  const st = mirror.style;
+  st.width = `${ta.clientWidth}px`; // without the scrollbar
+  for (const k of ['paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'fontFamily', 'fontSize',
+    'fontWeight', 'fontStyle', 'fontVariant', 'fontFeatureSettings', 'lineHeight', 'letterSpacing',
+    'wordSpacing', 'tabSize', 'textIndent', 'textTransform', 'whiteSpace', 'overflowWrap', 'wordBreak']) {
+    st[k] = cs[k];
+  }
+  return parseFloat(cs.lineHeight) || 24;
+}
+
+function renderNoteCarets() {
+  caretFrame = 0;
+  const layer = byId('note-carets');
+  const mirror = byId('note-mirror');
+  const ta = noteEditor();
+  if (!layer || !mirror || !ta) return;
+  layer.textContent = '';
+  const s = noteSessions.get(noteViewId);
+  const carets = noteCarets.get(noteViewId);
+  if (!s || !s.loaded || !carets || !carets.size) return;
+  const now = Date.now();
+  const pending = notePending(s);
+  const list = [];
+  for (const [uid, c] of carets) {
+    if (now - c.at > CARET_TTL_MS) { carets.delete(uid); continue; }
+    const pos = caretInEditor(s, c, pending);
+    if (pos !== null) list.push({ uid, pos, fresh: now - c.movedAt < CARET_TAG_MS });
+  }
+  if (!list.length) return;
+  // One layout for every caret: the text, cut at each position by an empty
+  // marker span.
+  const lineH = syncNoteMirror(ta, mirror);
+  const text = ta.value;
+  list.sort((a, b) => a.pos - b.pos);
+  mirror.textContent = '';
+  let i = 0;
+  for (const c of list) {
+    mirror.append(text.slice(i, c.pos));
+    c.mark = document.createElement('span');
+    mirror.append(c.mark);
+    i = c.pos;
+  }
+  mirror.append(text.slice(i));
+  for (const c of list) {
+    const user = state.users.get(c.uid);
+    const el = document.createElement('div');
+    el.className = 'note-caret';
+    el.classList.toggle('note-caret--fresh', c.fresh);
+    el.style.setProperty('--caret', `var(--avatar-${(user && user.avatar_color) || 0})`);
+    // The marker's own box is the font's height, like a native caret; the
+    // line box adds the leading above and below.
+    el.style.height = `${c.mark.offsetHeight || lineH}px`;
+    el.style.transform = `translate(${c.mark.offsetLeft - ta.scrollLeft}px, ${c.mark.offsetTop - ta.scrollTop}px)`;
+    const tag = document.createElement('span');
+    tag.className = 'note-caret-tag';
+    tag.textContent = user ? user.display_name : 'Someone';
+    el.append(tag);
+    layer.append(el);
+  }
+  mirror.textContent = '';
+}
+
+// How a channel or note is named in a sentence: "#design", "“Groceries”".
+function chanLabel(ch) {
+  return ch.kind === 'note' ? `“${ch.name}”` : `#${ch.name}`;
+}
+
+const isPersonalNote = (ch) => !!(ch && ch.kind === 'note' && state.me
+  && ch.created_by === state.me.id && ch.name === 'Personal note');
+
+// Your own name or avatar opens your Personal note (what used to be Notes).
+function openPersonalNote() {
+  const notes = sortedNotes().filter((c) => c.is_member);
+  const target = notes.find(isPersonalNote) || notes[0];
+  if (target) openChannel(target.id);
+}
+
+/* -------- the Notes list in the sidebar: the Notes row folds it */
+
+let foldNotes = false;
+try { foldNotes = localStorage.getItem(LS.foldNotes) === '1'; } catch { /* default open */ }
+
+function sortedNotes() {
+  return [...state.channels.values()]
+    // Like channels: public ones list for everyone, private ones for members.
+    .filter((c) => c.kind === 'note' && (!c.is_private || c.is_member))
+    .sort((a, b) => (isChannelPinned(b.id) - isChannelPinned(a.id))
+      || (b.is_member - a.is_member)
+      || (isPersonalNote(b) - isPersonalNote(a))
+      || a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+}
+
+function setNotesFolded(on) {
+  foldNotes = !!on;
+  try {
+    if (foldNotes) localStorage.setItem(LS.foldNotes, '1');
+    else localStorage.removeItem(LS.foldNotes);
+  } catch { /* nicety */ }
+  renderNoteList();
+}
+
+function renderNoteList() {
+  const list = byId('note-list');
+  const row = byId('notes-row');
+  if (row) {
+    row.classList.toggle('chan-group--open', !foldNotes);
+    const btn = row.querySelector('.chan-btn');
+    if (btn) {
+      btn.setAttribute('aria-expanded', foldNotes ? 'false' : 'true');
+      btn.title = foldNotes ? 'Show notes' : 'Fold notes';
+    }
+  }
+  if (!list) return;
+  list.textContent = '';
+  for (const ch of sortedNotes()) {
+    const open = ch.id === state.currentId;
+    // Folded, only the open note stays (never lose your place). Unjoined
+    // public notes follow the "unjoined channels" setting.
+    if (foldNotes && !open) continue;
+    if (!ch.is_member && !showUnjoined && !isChannelPinned(ch.id) && !open) continue;
+    const li = tpl('tpl-note-item');
+    if (!li) break;
+    li.dataset.id = ch.id;
+    li.classList.toggle('chan--active', open);
+    li.classList.toggle('chan--member', !!ch.is_member);
+    li.classList.toggle('chan--pinned', isChannelPinned(ch.id));
+    li.querySelector('.chan-name').textContent = ch.name;
+    setHidden(li.querySelector('.row-lock'), !ch.is_private);
+    li.querySelector('.chan-btn').title = `${ch.name} — ${ch.is_private ? 'private' : 'public'} note`;
+    list.append(li);
+  }
+}
+
+function openNewNoteModal() {
+  if (blockedOffline('Creating a note')) return;
+  const m = openModal('tpl-modal-new-channel');
+  if (!m) return;
+  const form = m.q('form') || m.q('.mform');
+  if (!form) return;
+  dressNoteForm(m, form, 'New note');
+  const priv = form.querySelector('[name=is_private]');
+  if (priv) priv.checked = true; // notes start private
+  const submit = form.querySelector('.mform-submit');
+  if (submit) submit.textContent = 'Create note';
+  on(form, 'submit', async (e) => {
+    e.preventDefault();
+    const fd = new FormData(form);
+    formError(m, '');
+    try {
+      const data = await api('/api/notes', {
+        method: 'POST',
+        toast: false,
+        body: { name: String(fd.get('name') || '').trim(), is_private: !!fd.get('is_private') },
+      });
+      mergeChannel(data.channel);
+      if (foldNotes) setNotesFolded(false);
+      renderSidebar();
+      m.close();
+      openChannel(data.channel.id);
+    } catch (err) {
+      formError(m, err.message);
+    }
+  });
+}
+
+// The new-channel form, worded for a note: a free-text title, no topic.
+function dressNoteForm(m, form, heading) {
+  const h = m.q('.modal-title');
+  if (h) h.textContent = heading;
+  const dialog = m.q('.modal');
+  if (dialog) dialog.setAttribute('aria-label', heading);
+  const nameEl = form.querySelector('[name=name]');
+  if (nameEl) {
+    nameEl.maxLength = 80;
+    nameEl.placeholder = 'e.g. Meeting notes';
+    nameEl.autocapitalize = 'sentences';
+    nameEl.spellcheck = true;
+    const label = nameEl.closest('.field') && nameEl.closest('.field').querySelector('.field-label');
+    if (label) label.textContent = 'Title';
+  }
+  const topicEl = form.querySelector('[name=topic]');
+  if (topicEl && topicEl.closest('.field')) topicEl.closest('.field').hidden = true;
+}
+
+/* -------- notes offline: every note you can open is kept, whole, in the
+   service worker's API store (the same one that keeps recent messages, swept
+   on logout), so it opens with no network. The store is keyed like the GET
+   the editor makes, so an offline open is answered from it.
+
+   - After each channel list (boot, reconnect), notes whose stored copy is
+     older than the list's note_rev are fetched again; notes no longer listed
+     are dropped.
+   - A note.op for a note that isn't open makes its copy stale: fetched again
+     shortly after (edits come in bursts).
+   - The open note writes its own copy as edits are confirmed — only a text
+     that matches its revision (nothing of ours still unsent), since an older
+     copy is caught up from that revision when opened. */
+
+const NOTE_STORE = 'slock-api'; // = API_CACHE in sw.js
+const noteStoreURL = (id) => `/api/notes/${id}`;
+const NOTE_STORE_MS = 1500;
+
+async function noteStore() {
+  try { return 'caches' in window ? await caches.open(NOTE_STORE) : null; } catch { return null; }
+}
+
+// The revision of the stored copy, or -1 without one.
+async function storedNoteRev(cache, id) {
+  try {
+    const res = await cache.match(noteStoreURL(id), { ignoreSearch: true });
+    if (!res) return -1;
+    const data = await res.json();
+    return data && data.note && typeof data.note.rev === 'number' ? data.note.rev : -1;
+  } catch { return -1; }
+}
+
+async function storeNoteOffline(id, body, rev) {
+  const cache = await noteStore();
+  if (!cache) return;
+  try {
+    if (await storedNoteRev(cache, id) > rev) return; // a newer copy is there already
+    await cache.put(noteStoreURL(id), new Response(
+      JSON.stringify({ note: { channel_id: id, body, rev } }),
+      { headers: { 'Content-Type': 'application/json' } }));
+  } catch { /* storage full or unavailable: online still works */ }
+}
+
+async function forgetNoteOffline(id) {
+  const cache = await noteStore();
+  if (cache) cache.delete(noteStoreURL(id)).catch(() => {});
+}
+
+// Store the open session's text once it is confirmed (see above).
+function scheduleNoteStore(s) {
+  clearTimeout(s.storeTimer);
+  s.storeTimer = setTimeout(() => {
+    s.storeTimer = 0;
+    if (!s.loaded) return;
+    if (noteBusy(s)) { scheduleNoteStore(s); return; }
+    const ch = state.channels.get(s.id);
+    if (ch && s.rev > (ch.note_rev || 0)) ch.note_rev = s.rev;
+    storeNoteOffline(s.id, s.doc, s.rev);
+  }, NOTE_STORE_MS);
+}
+
+let notePrefetch = null;   // the running pass
+let notePrefetchAgain = false;
+
+async function prefetchNotes() {
+  if (notePrefetch) { notePrefetchAgain = true; return; }
+  notePrefetch = (async () => {
+    const cache = await noteStore();
+    if (!cache || !state.connected) return;
+    const notes = [...state.channels.values()].filter((c) => c.kind === 'note');
+    const keep = new Set(notes.map((c) => noteStoreURL(c.id)));
+    try {
+      for (const req of await cache.keys()) {
+        const path = new URL(req.url).pathname;
+        if (/^\/api\/notes\/\d+$/.test(path) && !keep.has(path)) await cache.delete(req);
+      }
+    } catch { /* best effort */ }
+    // One at a time: a background chore, not something to compete with.
+    for (const ch of notes) {
+      if (!state.connected) return;
+      const s = noteSessions.get(ch.id);
+      if (s && s.loaded) continue; // an open note keeps its own copy
+      if (await storedNoteRev(cache, ch.id) >= (ch.note_rev || 0)) continue;
+      try {
+        const data = await api(noteStoreURL(ch.id), { toast: false });
+        if (data && data.note) await storeNoteOffline(ch.id, data.note.body, data.note.rev);
+      } catch { /* next pass */ }
+    }
+  })();
+  try { await notePrefetch; } finally {
+    notePrefetch = null;
+    if (notePrefetchAgain) { notePrefetchAgain = false; prefetchNotes(); }
+  }
+}
+
+const schedulePrefetchNotes = debounce(prefetchNotes, 3000);
 
 /* ============================================================ read state / badges */
 
@@ -3566,7 +4479,10 @@ function connectSSE() {
       }
       refetchChannels();
       flushOutbox(); // re-send anything that failed to send while offline
-      if (state.currentId) {
+      const cur = state.channels.get(state.currentId);
+      if (cur && cur.kind === 'note') {
+        // resyncNotes below catches the open note up
+      } else if (state.currentId) {
         const st = chanState(state.currentId);
         // A channel opened while offline may have never loaded (empty view).
         // Fill it for real now; otherwise just close the gap.
@@ -3575,6 +4491,7 @@ function connectSSE() {
       } else if (state.latest) {
         loadLatest(); // whatever arrived during the gap
       }
+      resyncNotes(); // edits made to open notes meanwhile
     }
   });
 
@@ -3613,6 +4530,9 @@ function connectSSE() {
     // The list is per channel, and a pin elsewhere must not repaint it.
     if (state.pinsRefresh) state.pinsRefresh(channel_id);
   });
+
+  es.addEventListener('note.op', (e) => onNoteOp(JSON.parse(e.data)));
+  es.addEventListener('note.caret', (e) => onNoteCaret(JSON.parse(e.data)));
 
   es.addEventListener('channel.delete', (e) => {
     dropDeletedChannel(JSON.parse(e.data).channel_id);
@@ -3811,6 +4731,7 @@ const pal = {
   items: [],       // [{el, pick}]
   active: 0,
   searchResults: [],
+  noteResults: [],  // notes whose text matched (GET /api/search "notes")
   abort: null,
   completion: null, // {replace, with}
   seq: 0,
@@ -3881,7 +4802,7 @@ function paletteRecentEntries(all, skip = []) {
       if (e) out.push(Object.assign(e, { history: h }));
     } else if (h.t === 'c') {
       if (h.id === state.currentId) continue;
-      const e = all.find((x) => (x.kind === 'channel' || x.kind === 'dm' || x.kind === 'notes') && x.id === h.id);
+      const e = all.find((x) => (x.kind === 'channel' || x.kind === 'dm' || x.kind === 'note') && x.id === h.id);
       if (e && !skip.includes(e)) out.push(Object.assign(e, { history: h }));
     }
   }
@@ -3894,6 +4815,7 @@ function openPalette(prefill = '') {
   if (!p || !input) return;
   pal.open = true;
   pal.searchResults = [];
+  pal.noteResults = [];
   p.hidden = false;
   input.value = prefill;
   renderPalette();
@@ -3907,6 +4829,7 @@ function closePalette() {
   p.hidden = true;
   pal.open = false;
   pal.searchResults = [];
+  pal.noteResults = [];
   if (pal.abort) { pal.abort.abort(); pal.abort = null; }
   return true;
 }
@@ -3971,6 +4894,26 @@ function allPaletteEntries(q) {
       });
     }
   }
+  // Notes, by title, beside the channels ("#" finds them too).
+  if (!biasPeople) {
+    for (const ch of state.channels.values()) {
+      if (ch.kind !== 'note' || (ch.is_private && !ch.is_member)) continue;
+      const score = needle ? fuzzyScore(needle, ch.name) : 0;
+      if (score < 0) continue;
+      const n = ch.member_count || 0;
+      let sub = `${ch.is_private ? 'Private' : 'Public'} note`;
+      if (n > 1) sub += ` · ${n} members`;
+      if (!ch.is_member) sub = `Not joined · ${sub}`;
+      entries.push({
+        kind: 'note', id: ch.id, score: score + (ch.is_member ? 1 : 0) + (isPersonalNote(ch) ? 0.5 : 0),
+        unread: false,
+        recency: '',
+        title: ch.name,
+        sub,
+        icon: '✎',
+      });
+    }
+  }
   // Latest, findable by name like any channel ("#lat" too).
   const latestScore = needle ? fuzzyScore(needle, 'Latest') : 0;
   if (latestScore >= 0 && !biasPeople) {
@@ -3984,19 +4927,6 @@ function allPaletteEntries(q) {
     });
   }
   if (!biasChannels) {
-    // Notes, findable by name (you are otherwise left out of the people below).
-    const notesScore = needle ? fuzzyScore(needle, 'Notes') : 0;
-    if (notesScore >= 0 && state.me) {
-      const notes = notesChannel();
-      entries.push({
-        kind: 'notes', id: notes ? notes.id : 0, score: notesScore,
-        unread: false,
-        recency: (notes && notes.last_message_at) || '',
-        title: 'Notes',
-        sub: 'Only you can see these',
-        icon: '✎',
-      });
-    }
     const dmByPeer = new Map();
     for (const ch of state.channels.values()) {
       if (ch.kind === 'dm') dmByPeer.set(ch.peer_user_id, ch);
@@ -4026,7 +4956,7 @@ function allPaletteEntries(q) {
   // A conversation with a half-written message (not the open one: its text
   // is right there) says so, and shows how it starts.
   for (const e of entries) {
-    e.draft = (e.kind === 'channel' || e.kind === 'dm' || e.kind === 'notes')
+    e.draft = (e.kind === 'channel' || e.kind === 'dm')
       && e.id !== state.currentId && hasDraft(e.id);
     if (e.draft) e.sub = `✎ Draft: ${draftSnippet(e.id)}`;
   }
@@ -4114,6 +5044,44 @@ function renderPalette() {
     }
   }
 
+  // A search you followed is worth offering again.
+  const rememberSearch = () => {
+    const typed = byId('palette-input');
+    if (typed && typed.value.trim()) rememberInPalette({ t: 's', q: typed.value.trim() });
+  };
+
+  if (pal.noteResults.length) {
+    list.append(paletteGroupHeader('In notes'));
+    // The words the server matched on (quotes dropped, lowercased, as it does).
+    const words = q.textStr.replace(/"/g, ' ').toLowerCase().split(/\s+/).filter(Boolean);
+    for (const r of pal.noteResults) {
+      const li = tpl('tpl-search-result') || tpl('tpl-palette-item');
+      if (!li) break;
+      li.dataset.kind = 'note-hit';
+      li.dataset.id = r.channel_id;
+      const chEl = li.querySelector('.res-channel');
+      if (chEl) chEl.textContent = `“${r.name}”`;
+      const au = li.querySelector('.res-author');
+      if (au) au.textContent = 'Note';
+      const tm = li.querySelector('.res-time');
+      if (tm) {
+        tm.textContent = relativeTime(r.updated_at);
+        tm.title = `Edited ${new Date(r.updated_at).toLocaleString()}`;
+      }
+      const sn = li.querySelector('.res-snippet');
+      if (sn) renderSnippet(sn, r.snippet);
+      list.append(li);
+      pal.items.push({
+        el: li,
+        pick: () => {
+          rememberSearch();
+          closePalette();
+          openChannel(r.channel_id, { noteMatch: { at: r.at, len: r.len, words } });
+        },
+      });
+    }
+  }
+
   if (pal.searchResults.length) {
     list.append(paletteGroupHeader('Messages'));
     for (const r of pal.searchResults) {
@@ -4141,9 +5109,7 @@ function renderPalette() {
       pal.items.push({
         el: li,
         pick: () => {
-          // A search you followed is worth offering again.
-          const typed = byId('palette-input');
-          if (typed && typed.value.trim()) rememberInPalette({ t: 's', q: typed.value.trim() });
+          rememberSearch();
           closePalette();
           openChannel(r.channel_id, { jumpTo: r.message.id });
         },
@@ -4243,7 +5209,7 @@ function movePaletteActive(delta) {
 // "click a person" affordance: palette, DM picker, message author/avatar.
 async function openDMWith(userId) {
   if (!userId) return;
-  if (state.me && userId === state.me.id) { openNotes(); return; } // your own name/avatar
+  if (state.me && userId === state.me.id) { openPersonalNote(); return; } // your own name/avatar
   const u = state.users.get(userId);
   if (u && u.is_bot) return; // bots are posted to, not chatted with
   try {
@@ -4266,12 +5232,10 @@ async function pickPaletteEntry(entry) {
     return;
   }
   closePalette();
-  if (entry.kind === 'channel' || entry.kind === 'dm') {
+  if (entry.kind === 'channel' || entry.kind === 'dm' || entry.kind === 'note') {
     openChannel(entry.id);
   } else if (entry.kind === 'user') {
     openDMWith(entry.id);
-  } else if (entry.kind === 'notes') {
-    openNotes();
   } else if (entry.kind === 'latest') {
     openLatest();
   }
@@ -4285,6 +5249,7 @@ const schedulePaletteSearch = debounce(async () => {
   // Leading # / @ means the user is navigating, not searching.
   if (!raw || raw.startsWith('#') || raw.startsWith('@') || (!q.textStr && !q.hasFilter)) {
     pal.searchResults = [];
+    pal.noteResults = [];
     renderPalette();
     return;
   }
@@ -4298,10 +5263,12 @@ const schedulePaletteSearch = debounce(async () => {
     });
     if (seq !== pal.seq || !pal.open) return; // stale response
     pal.searchResults = data.results || [];
+    pal.noteResults = data.notes || [];
     renderPalette();
   } catch (err) {
     if (err.name === 'AbortError') return;
     pal.searchResults = [];
+    pal.noteResults = [];
     renderPalette();
   }
 }, 180);
@@ -4539,12 +5506,16 @@ function openChannelInfoModal() {
   const m = openModal('tpl-modal-new-channel');
   if (!m) return;
   // Same form as "New channel", but this is the channel's details.
+  const isNote = ch.kind === 'note';
+  const label = chanLabel(ch);
+  const noun = isNote ? 'note' : 'channel';
   const heading = m.q('.modal-title');
   if (heading) heading.textContent = 'Channel details';
   const dialog = m.q('.modal');
   if (dialog) dialog.setAttribute('aria-label', 'Channel details');
   const form = m.q('form') || m.q('.mform');
   if (!form) return;
+  if (isNote) dressNoteForm(m, form, 'Note details');
   const nameEl = form.querySelector('[name=name]');
   const topicEl = form.querySelector('[name=topic]');
   const privEl = form.querySelector('[name=is_private]');
@@ -4567,10 +5538,10 @@ function openChannelInfoModal() {
     const leave = document.createElement('button');
     leave.type = 'button';
     leave.className = 'mform-leave';
-    leave.textContent = `Leave #${ch.name}`;
+    leave.textContent = `Leave ${label}`;
     form.append(leave);
     on(leave, 'click', async () => {
-      const ok = await confirmModal(`Leave #${ch.name}?`, 'Leave');
+      const ok = await confirmModal(`Leave ${label}?`, 'Leave');
       if (!ok) return;
       try {
         await api(`/api/channels/${ch.id}/leave`, { method: 'POST' });
@@ -4581,7 +5552,7 @@ function openChannelInfoModal() {
         renderSidebar();
         renderChannelHeader();
         updateBadges();
-        toast(`Left #${ch.name}`);
+        toast(`Left ${label}`);
       } catch { /* toasted */ }
     });
   }
@@ -4591,24 +5562,25 @@ function openChannelInfoModal() {
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'mform-leave mform-delete';
-    del.textContent = `Delete #${ch.name}`;
+    del.textContent = `Delete ${label}`;
     form.append(del);
     on(del, 'click', async () => {
-      if (blockedOffline('Deleting a channel')) return;
+      if (blockedOffline(`Deleting a ${noun}`)) return;
+      if (!await confirmModal(isNote
+        ? `Delete ${label}? Its text is deleted too, for everyone.`
+        : `Delete ${label}? Every message, file and pin in it is deleted too, for everyone.`,
+      'Delete')) return;
       if (!await confirmModal(
-        `Delete #${ch.name}? Every message, file and pin in it is deleted too, for everyone.`,
-        'Delete')) return;
-      if (!await confirmModal(
-        `Are you sure? Deleting #${ch.name} cannot be undone.`,
+        `Are you sure? Deleting ${label} cannot be undone.`,
         'Yes, delete it')) return;
       if (!await confirmModal(
-        `Last step: deleting #${ch.name} for good.`,
-        'Delete channel', { typed: ch.name })) return;
+        `Last step: deleting ${label} for good.`,
+        `Delete ${noun}`, { typed: ch.name })) return;
       try {
         await api(`/api/channels/${ch.id}`, { method: 'DELETE', body: { name: ch.name } });
         m.close();
         dropDeletedChannel(ch.id, { mine: true });
-        toast(`Deleted #${ch.name}`);
+        toast(`Deleted ${label}`);
       } catch { /* toasted */ }
     });
   }
@@ -4618,10 +5590,8 @@ function openChannelInfoModal() {
     if (!canEdit) { m.close(); return; }
     formError(m, '');
     try {
-      const body = {
-        name: nameEl ? nameEl.value.trim() : ch.name,
-        topic: topicEl ? topicEl.value.trim() : ch.topic,
-      };
+      const body = { name: nameEl ? nameEl.value.trim() : ch.name };
+      if (!isNote) body.topic = topicEl ? topicEl.value.trim() : ch.topic;
       if (privEl && privEl.checked !== !!ch.is_private) body.is_private = privEl.checked;
       const data = await api(`/api/channels/${ch.id}`, { method: 'PATCH', toast: false, body });
       const becamePrivate = body.is_private === true;
@@ -4630,7 +5600,8 @@ function openChannelInfoModal() {
       renderChannelHeader();
       m.close();
       if (body.is_private !== undefined) {
-        toast(becamePrivate ? `#${data.channel.name} is now private` : `#${data.channel.name} is now public`);
+        const now = chanLabel(data.channel);
+        toast(becamePrivate ? `${now} is now private` : `${now} is now public`);
       }
     } catch (err) {
       formError(m, err.message);
@@ -4713,7 +5684,7 @@ async function openMembersModal() {
 
   const render = () => {
     if (titleEl) {
-      titleEl.textContent = `#${ch.name} — ${ch.member_count || (members ? members.length : 0)} member${(ch.member_count || 0) === 1 ? '' : 's'}`;
+      titleEl.textContent = `${chanLabel(ch)} — ${ch.member_count || (members ? members.length : 0)} member${(ch.member_count || 0) === 1 ? '' : 's'}`;
     }
     if (listEl) {
       listEl.textContent = '';
@@ -4777,7 +5748,7 @@ async function openMembersModal() {
       const row = e.target.closest('.member');
       const uid = Number(row.dataset.userId);
       const u = state.users.get(uid);
-      const ok = await confirmModal(`Remove ${u ? u.display_name : 'this member'} from #${ch.name}?`, 'Remove');
+      const ok = await confirmModal(`Remove ${u ? u.display_name : 'this member'} from ${chanLabel(ch)}?`, 'Remove');
       if (!ok) return;
       try {
         await api(`/api/channels/${chId}/members/${uid}`, { method: 'DELETE' });
@@ -6322,6 +7293,56 @@ function wireSidebarResize() {
   });
 }
 
+/* -------- note width (device-local, desktop only): drag either edge of the
+   sheet behind a note's text; the column stays centred, so the width is twice
+   the pointer's distance from the middle. Double-click a grip to reset. */
+
+const NOTE_PAD = 40; // the sheet's inset around the text (--note-pad)
+
+function applyNoteWidth(w) {
+  const view = byId('note-view');
+  if (!view) return;
+  if (w) view.style.setProperty('--note-w', w + 'px');
+  else view.style.removeProperty('--note-w');
+  scheduleCaretRender(); // the text rewraps
+}
+
+function wireNoteResize() {
+  const view = byId('note-view');
+  if (!view) return;
+  let width = 0; // last dragged value, persisted on release
+  let grip = null;
+  const clampW = (w, viewW) => Math.round(Math.max(320, Math.min(viewW - 48 - 2 * NOTE_PAD, w)));
+  for (const g of view.querySelectorAll('.note-grip')) {
+    on(g, 'pointerdown', (e) => {
+      e.preventDefault();
+      grip = g;
+      view.classList.add('note-resizing');
+      g.setPointerCapture(e.pointerId);
+    });
+    on(g, 'pointermove', (e) => {
+      if (grip !== g) return;
+      const r = view.getBoundingClientRect();
+      const half = Math.abs(e.clientX - (r.left + r.width / 2));
+      width = clampW(2 * (half - NOTE_PAD), r.width);
+      applyNoteWidth(width);
+    });
+    const release = () => {
+      if (grip !== g) return;
+      grip = null;
+      view.classList.remove('note-resizing');
+      if (width) localStorage.setItem(LS.noteW, String(width));
+    };
+    on(g, 'pointerup', release);
+    on(g, 'pointercancel', release);
+    on(g, 'dblclick', () => {
+      width = 0;
+      localStorage.removeItem(LS.noteW);
+      applyNoteWidth(0);
+    });
+  }
+}
+
 function closeMeMenu() {
   const menu = byId('me-menu');
   if (menu && !menu.hidden) { menu.hidden = true; return true; }
@@ -6805,7 +7826,19 @@ function wireSidebar() {
   on(byId('channel-list'), 'click', open);
   on(byId('dm-list'), 'click', open);
   on(byId('latest-row'), 'click', () => openLatest());
-  on(byId('notes-row'), 'click', () => openNotes());
+  on(byId('note-list'), 'click', open);
+  on(byId('notes-row') && byId('notes-row').querySelector('.chan-btn'), 'click', () => setNotesFolded(!foldNotes));
+  on(byId('new-note-btn'), 'click', openNewNoteModal);
+  on(noteEditor(), 'input', () => {
+    const s = noteSessions.get(noteViewId);
+    if (s) captureNoteInput(s);
+  });
+  // Our caret moved (typing, clicks, arrows, selecting): tell the others.
+  for (const ev of ['input', 'select', 'selectionchange', 'keyup', 'mouseup', 'focus']) {
+    on(noteEditor(), ev, () => { if (noteViewId) sendNoteCaret(); });
+  }
+  on(noteEditor(), 'scroll', scheduleCaretRender, { passive: true });
+  window.addEventListener('resize', scheduleCaretRender);
   on(byId('new-channel-btn'), 'click', openNewChannelModal);
   on(byId('new-dm-btn'), 'click', openNewDMModal);
   on(byId('fold-channels'), 'click', () => setSectionFolded('channel', !foldChans));
@@ -6868,7 +7901,13 @@ function wireHeader() {
       mergeChannel(data.channel);
       renderSidebar();
       renderChannelHeader();
-      toast(`Joined #${ch.name}`);
+      toast(`Joined ${chanLabel(ch)}`);
+      if (ch.kind === 'note') {
+        // Edits only stream to members: catch up on any made while looking.
+        const s = noteSessions.get(ch.id);
+        if (s) fetchNoteOps(s);
+        return;
+      }
       // A non-member gets no realtime, so anything said between opening this
       // channel and joining it is missing — and the join hands back an unread
       // count for exactly those. Catch up, then the visible newest can be
@@ -6983,6 +8022,7 @@ function wireKeyboard() {
     if (e.key === 'PageUp' || e.key === 'PageDown') {
       const lightbox = byId('lightbox');
       if (topModal() || pal.open || (lightbox && !lightbox.hidden)) return;
+      if (noteViewId) return; // a note scrolls (and moves its caret) itself
       const sc = byId('message-scroll');
       if (!sc) return;
       e.preventDefault();
@@ -6994,7 +8034,7 @@ function wireKeyboard() {
     // shortcut. Bail when anything is open (modal/palette/lightbox/menu/emoji
     // picker) or focus is already in a field, so normal tab-navigation stands.
     if (e.key === 'Tab' && !e.shiftKey && !mod && !e.altKey) {
-      const ta = byId('composer-input');
+      const ta = noteViewId ? noteEditor() : byId('composer-input');
       const ae = document.activeElement;
       const inField = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA'
         || ae.tagName === 'SELECT' || ae.isContentEditable);
@@ -7116,6 +8156,7 @@ function wireVisibility() {
       }
       refetchChannels();
       if (state.currentId) gapFill(state.currentId);
+      resyncNotes();
     }
     maybeMarkRead();
   });
@@ -7125,6 +8166,7 @@ function wireVisibility() {
     saveDraftFor(state.currentId);
     persistDrafts();
     flushMarkRead();
+    for (const s of noteSessions.values()) flushNoteEdits(s);
   });
   // Phone keyboards: when the visual viewport shrinks under a focused
   // composer, scroll the composer back into view and keep the message list
@@ -7279,6 +8321,7 @@ async function boot() {
   document.body.classList.toggle('side-hidden', localStorage.getItem(LS.sideHidden) === '1');
   applyDensity(localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy');
   applySidebarWidth(parseInt(localStorage.getItem(LS.sidebarW), 10) || 0);
+  applyNoteWidth(parseInt(localStorage.getItem(LS.noteW), 10) || 0);
   applyZoom(parseFloat(localStorage.getItem(LS.zoom)) || 1);
   loadClosedDMs();
   loadSidebarPrefs();
@@ -7313,6 +8356,7 @@ async function boot() {
   wireVisibility();
   wireSwipe();
   wireSidebarResize();
+  wireNoteResize();
   wireInternalLinks();
 
   // Workspace identity, in parallel and non-blocking: the built-in mark and

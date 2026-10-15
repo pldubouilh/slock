@@ -22,7 +22,7 @@ something here, change it here first.
   "created_at": "...", "last_seen_at": "...",
   "avatar_url": "/api/users/3/avatar?v=1a2b3c4d5e6f" }
 
-// Channel — `kind` is "channel" or "dm".
+// Channel — `kind` is "channel", "dm" or "note" (a shared note, see Notes).
 { "id": 12, "kind": "channel", "name": "design", "topic": "pixels",
   "is_private": false, "created_by": 1, "created_at": "...",
   "last_message_at": "...", "is_member": true, "muted": false,
@@ -115,7 +115,7 @@ because the URL is versioned by content hash.
 
 | Method | Path | Body | Response |
 |---|---|---|---|
-| GET | `/api/channels` | – | `200 {channels: [Channel], dms: [Channel]}` |
+| GET | `/api/channels` | – | `200 {channels: [Channel], dms: [Channel], notes: [Channel]}` |
 | POST | `/api/channels` | `{name, topic?, is_private?}` | `201 {channel}` |
 | GET | `/api/channels/{id}` | – | `200 {channel}` (includes `members`) |
 | PATCH | `/api/channels/{id}` | `{name?, topic?, is_private?}` | `200 {channel}` |
@@ -142,13 +142,35 @@ list ones you have not joined) plus private channels you belong to. `dms` holds
 only DM channels you belong to that have at least one message or were opened by
 you.
 
-`POST /api/dms` with your own `user_id` gets-or-creates your self-DM (one member, `peer_user_id` = you). The client presents it as **Notes**: a fixed sidebar row under Latest, left out of the DM list. It never notifies or counts as unread, since push and unread both skip the message's own author.
+`POST /api/dms` with your own `user_id` gets-or-creates your self-DM (one member, `peer_user_id` = you). It used to be the client's **Notes**; migration 0013 copied its text into each person's Personal note (see Notes), and the web client no longer lists it. It never notifies or counts as unread, since push and unread both skip the message's own author.
 
 Channel names: lowercase, 1–40 chars, `[a-z0-9-_]`, unique. The server
 normalises (lowercases, spaces → `-`). Duplicate name → `409 conflict`.
 
 Only the creator or an admin may rename/retopic a channel or remove members.
 DM channels cannot be renamed, joined, or left.
+
+## Notes
+
+A note is a channel of `kind: "note"` holding one plain text instead of messages, edited by several people at once. The channel routes above manage it: PATCH renames it (`name` is a free-text title, 1–80 characters, not unique; `topic` is ignored) or flips `is_private`, `/join`, `/leave`, `/members` and DELETE (body `{name}` = the title) work as for a channel, with the same permissions. It never has messages (`POST /messages` → `400`), activity lines, unread counts or push.
+
+Notes start private. A public note is listed for, and readable and editable by, everyone not limited to a channel allowlist; a limited user only sees the notes they are a member of (invites are never checked against the allowlist, which names channels). `GET /api/channels` returns them in `notes`: the ones you are in plus the public ones, sorted by title, each with `note_rev` (the text's current revision; left out at 0). The client keeps every listed note in the service worker's API store for offline reading and refetches only those whose stored revision is behind `note_rev`; the service worker answers `GET /api/notes/{id}` from that store when the network is down (or, as for other reads, while the client has no live stream).
+
+Every account has a private **Personal note**, made with the account; migration 0013 made one for each existing account, filled with what they had written in their self-DM ("Notes"): oldest first, one message per paragraph, attachments named in brackets.
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| POST | `/api/notes` | `{name, is_private?}` — private unless `is_private: false` | `201 {channel}` |
+| GET | `/api/notes/{id}` | – | `200 {note: {channel_id, body, rev, updated_at, updated_by}}` |
+| POST | `/api/notes/{id}/ops` | `{base_rev, client_op, op}` | `200 {rev}` |
+| GET | `/api/notes/{id}/ops?since=REV` | – | `200 {rev, ops: [NoteOp]}`, oldest first; `409` once pruned |
+| POST | `/api/notes/{id}/caret` | `{rev, start, end}` — your caret/selection; `start: -1` = you left | `204` |
+
+Editing is operational transformation. `rev` counts the edits applied to the text. An edit `op` is the ot.js array form walking the whole text: a positive number keeps that many characters, a negative number deletes that many, a string inserts itself, e.g. `[5, "hi", -3, 10]`. Lengths count UTF-16 code units (JS string lengths), and the op's kept + deleted total must equal the text's length at `base_rev`, the revision the client last had. The server rebases the edit over every edit applied since `base_rev` (where two edits insert at the same spot, the incoming one goes first), applies it, and answers with its new `rev`. `client_op` is the sender's id for the edit: a retried send of an edit already applied answers with its revision and changes nothing. Editing a public note you are not in joins you. Texts are capped at 500,000 units.
+
+Carets: a client posts where its caret (or selection) is, throttled and again every 25 s while the note stays open, in UTF-16 positions of the text at revision `rev` (its own unconfirmed edits taken out). Nothing is stored; the server relays it to the other members as `note.caret` `{channel_id, user_id, rev, start, end}`. Receivers shift it through the edits applied since `rev`, and drop a caret not heard from for 70 s.
+
+Every applied edit goes to the note's members as a `note.op` frame (`NoteOp`: `{channel_id, rev, user_id, client_op, op}`), in revision order, the sender included: the client recognises its own edit by `client_op` as the acknowledgement. A client that sees a gap in the revisions fetches the missing edits with `GET /ops?since=`. The server keeps the last 1,000 edits of each note; a client further behind than that gets `409` and reloads the note.
 
 ## Messages
 
@@ -207,12 +229,19 @@ Each element is an Attachment plus `user_id` and `created_at` from its message.
 
 ## Search
 
-`GET /api/search?q=<query>&limit=<n>` → `200 {results: [SearchResult]}`
+`GET /api/search?q=<query>&limit=<n>` → `200 {results: [SearchResult], notes: [NoteHit]}`
 
 ```jsonc
 { "message": Message, "channel_id": 12, "channel_name": "design",
   "channel_kind": "channel", "user_id": 3, "user_name": "Ana",
   "snippet": "…a <mark>pixel</mark> perfect…" }
+```
+
+`notes` are the notes you can open (yours, or public ones unless you are limited to an allowlist) whose text contains every word of the query, case-insensitive substring match, most recently edited first, at most 5. A query with `from:` or `in:` returns none. `at` / `len` locate the first match in UTF-16 units, as the editor counts, so the client opens the note with it selected:
+
+```jsonc
+{ "channel_id": 40, "name": "Groceries", "updated_at": "2026-10-20T09:12:00Z",
+  "snippet": "Buy <mark>milk</mark> and eggs…", "at": 15, "len": 4 }
 ```
 
 Query grammar — filters may appear anywhere, remaining words are the text:
@@ -265,6 +294,8 @@ channel with `after=<last known id>`.
 | `channel.new` | `{channel: Channel}` — you were added, or a public channel was created |
 | `channel.update` | `{channel: Channel}` |
 | `channel.delete` | `{channel_id}` — the channel was deleted; clients drop it (and move off it if open) |
+| `note.op` | `NoteOp` `{channel_id, rev, user_id, client_op, op}` — an edit applied to a note you are in (see Notes) |
+| `note.caret` | `{channel_id, user_id, rev, start, end}` — someone's caret in a note you are in; `start: -1` = they left it |
 | `channel.members` | `{channel_id, members: [id], member_count}` |
 | `channel.read` | `{channel_id, last_read_message_id}` — from your other tabs |
 | `channel.mute` | `{channel_id, muted}` — from your other tabs |

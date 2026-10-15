@@ -255,6 +255,9 @@ func bootstrap(ctx context.Context, database *db.DB) error {
 	if err != nil {
 		return err
 	}
+	if err := database.CreatePersonalNote(ctx, adminID); err != nil {
+		return err
+	}
 
 	var channelID int64
 	err = database.Pool.QueryRow(ctx,
