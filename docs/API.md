@@ -205,6 +205,7 @@ attachments and reactions in the same batch.
   `client_id` is never deduped.
 - The web client leans on that for its device-local **outbox** (`slock:outbox` in localStorage): every message is stored there before it's sent and removed only once the server confirms it. After a reload or crash, unconfirmed messages reappear as "not sent" and go out on the next connection; network and 5xx failures retry by themselves (on reconnect and every 20 s while connected), while 4xx refusals wait for the user's Retry or Discard. Drafts are saved on every pause in typing and whenever the app goes to the background. Nothing is ever stored server-side until it's actually sent.
 - Body max 40,000 characters (Unicode code points). The client folds anything over 10,000 behind a "Show more" button, and refuses an over-long send up front with a count instead of letting it fail. Drafts are never truncated. Only the author may edit; author or admin may delete.
+- **`[more]` folds.** Lines between a `[more]` line and a `[/more]` line are folded behind a "Show more" button in the client (a second `[more]` also closes one; one left open runs to the end; inside ``` fences the markers are plain text). The body is stored as written; web push notifications show each folded part as "…".
 - Soft-deleted messages come back with `deleted_at` set and `body: ""`.
 - `{emoji}` is URL-encoded; server caps it at 24 bytes.
 - Posting a message joins the sender to a public channel automatically.

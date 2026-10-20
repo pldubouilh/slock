@@ -737,13 +737,14 @@ function renderFoldedBody(bodyEl, m) {
   const text = m.body || '';
   // Cheap guard first: a string of ≤ FOLD_AT UTF-16 units can't hold more
   // than FOLD_AT characters, so the common case never splits the string.
-  if (text.length <= FOLD_AT || unfoldedMsgs.has(msgKey(m))) {
-    renderBody(bodyEl, text);
+  const key = msgKey(m);
+  if (text.length <= FOLD_AT || unfoldedMsgs.has(key)) {
+    renderBody(bodyEl, text, key);
     return;
   }
   const chars = [...text]; // code points, like the server's limit
   if (chars.length <= FOLD_AT) {
-    renderBody(bodyEl, text);
+    renderBody(bodyEl, text, key);
     return;
   }
   // Cut at the last line break shortly before the limit, so markdown isn't
@@ -751,7 +752,7 @@ function renderFoldedBody(bodyEl, m) {
   let shown = chars.slice(0, FOLD_AT).join('');
   const nl = shown.lastIndexOf('\n');
   if (nl > shown.length * 0.8) shown = shown.slice(0, nl);
-  renderBody(bodyEl, shown + '…');
+  renderBody(bodyEl, shown + '…', key);
 
   const hidden = chars.length - [...shown].length;
   const more = document.createElement('button');
@@ -1068,14 +1069,99 @@ function renderInline(text, out) {
   flush();
 }
 
+// [more] … [/more]: a part of a message folded away behind a "Show more"
+// button, for detail the reader may not want — each one of a list's entries,
+// say. The markers sit on lines of their own (case and surrounding spaces
+// don't matter). A [more] while one is open closes it too, so a block closed
+// with a second [more] by mistake still folds; one left open runs to the end.
+// Inside a ``` fence they are just text.
+//
+// Which blocks the reader opened lasts the session, per message (`key`), so a
+// re-render for a reaction or an edit doesn't fold them back.
+const MORE_MARK = /^[ \t]*\[(\/?)more\][ \t]*$/gim;
+const openedMores = new Set(); // `${msgKey}#${n}` of each block opened
+
+// The body as runs: { text, more } in order, `more` true for folded ones.
+function splitMore(src) {
+  if (!/\[\/?more\]/i.test(src)) return [{ text: src, more: false }];
+  const fences = [];
+  for (const f of src.matchAll(/```[\s\S]*?```/g)) fences.push([f.index, f.index + f[0].length]);
+  const inFence = (i) => fences.some(([a, b]) => i >= a && i < b);
+  const runs = [];
+  let open = false;
+  let last = 0;
+  for (const mk of src.matchAll(MORE_MARK)) {
+    if (inFence(mk.index)) continue;
+    const closing = mk[1] === '/';
+    if (!open && closing) continue; // a stray [/more] stays literal
+    // The line breaks around a marker line belong to it, not to the runs.
+    const text = src.slice(last, mk.index).replace(/^\n/, '').replace(/\n$/, '');
+    if (text || open) runs.push({ text, more: open });
+    open = !open;
+    last = mk.index + mk[0].length;
+  }
+  const tail = src.slice(last).replace(/^\n/, '');
+  if (tail || open) runs.push({ text: tail, more: open });
+  return runs;
+}
+
+function renderBody(el, body, key) {
+  el.textContent = '';
+  const runs = splitMore(String(body));
+  if (runs.length === 1 && !runs[0].more) {
+    renderBodyRun(el, runs[0].text);
+    return;
+  }
+  let n = 0;
+  for (const run of runs) {
+    if (!run.more) {
+      const part = document.createElement('div');
+      renderBodyRun(part, run.text);
+      el.append(part);
+      continue;
+    }
+    const id = key ? `${key}#${n}` : '';
+    n++;
+    el.append(makeMoreBlock(run.text, id));
+  }
+}
+
+function makeMoreBlock(text, id) {
+  const block = document.createElement('div');
+  block.className = 'more-block';
+  const inner = document.createElement('div');
+  inner.className = 'more-body';
+  renderBodyRun(inner, text);
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'more-toggle';
+  const set = (open) => {
+    block.classList.toggle('more-block--open', open);
+    inner.hidden = !open;
+    btn.textContent = open ? 'Show less' : 'Show more';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  set(!!id && openedMores.has(id));
+  // Handled here, and kept from the row's own click / Enter (a Latest row
+  // opens its message).
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = inner.hidden;
+    if (id) { if (open) openedMores.add(id); else openedMores.delete(id); }
+    set(open);
+  });
+  btn.addEventListener('keydown', (e) => e.stopPropagation());
+  block.append(inner, btn);
+  return block;
+}
+
 // ```fences``` are matched anywhere in the body, not just at the start of a
 // line — "text ```code``` more" is a code block mid-message, the way Slack and
 // Discord treat it. A newline that only exists to separate a fence sitting on
 // its own line from its neighbours is absorbed so the block does not gain a
 // blank line; a fence glued to text ("teset ```…") keeps that text inline
 // before it. An unclosed fence has no match and stays literal.
-function renderBody(el, body) {
-  el.textContent = '';
+function renderBodyRun(el, body) {
   const src = String(body);
   const fence = /```([\s\S]*?)```/g;
   let last = 0;

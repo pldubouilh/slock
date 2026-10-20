@@ -1265,6 +1265,36 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
 }
 .msg-more:hover, .msg-more:focus-visible { text-decoration-thickness: 2px; }
 
+/* [more] … [/more] in a message: the folded part, then its toggle. Opened,
+   the part wears a faint rule on its left so it reads as the fold's. */
+.more-block { margin-block: 2px; }
+.more-body {
+  padding-inline-start: 10px;
+  border-inline-start: 2px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.more-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  color: var(--accent);
+  font-size: var(--fs-s);
+  font-weight: 600;
+}
+.more-block--open .more-toggle { margin-block-start: 2px; }
+.more-toggle::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-block-start: -3px;
+  border: solid currentColor;
+  border-width: 0 1.6px 1.6px 0;
+  transform: rotate(45deg);
+  transition: transform var(--t-fast) var(--ease), margin var(--t-fast) var(--ease);
+}
+.more-block--open .more-toggle::after { transform: rotate(-135deg); margin-block-start: 3px; }
+.more-toggle:hover, .more-toggle:focus-visible { text-decoration: underline; text-underline-offset: 2px; }
+
 /* brief attention flash after a palette jump; JS removes the class shortly */
 .msg--highlight { animation: msg-flash 2.2s var(--ease); }
 @keyframes msg-flash {

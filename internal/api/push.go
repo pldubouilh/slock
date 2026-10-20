@@ -414,7 +414,7 @@ func (s *Server) unreadTotal(ctx context.Context, userID int64) int {
 // pushText renders the notification title and body: channels are labelled with
 // the channel name and prefix the author, DMs are labelled with the author.
 func pushText(msg *db.Message, ch *db.Channel, author *db.User) (title, body string) {
-	text := strings.Join(strings.Fields(msg.Body), " ")
+	text := strings.Join(strings.Fields(foldMore(msg.Body)), " ")
 	if ch.Kind == db.KindDM {
 		title = author.DisplayName
 		if text == "" {
@@ -427,6 +427,37 @@ func pushText(msg *db.Message, ch *db.Channel, author *db.User) (title, body str
 		return title, author.DisplayName + " sent an attachment"
 	}
 	return title, truncateRunes(author.DisplayName+": "+text, pushBodyRunes)
+}
+
+// foldMore replaces each [more] … [/more] part of a message with "…": it is
+// folded away in the app, so a notification doesn't spell it out either. The
+// markers sit on lines of their own; a [more] while one is open closes it,
+// and one left open runs to the end (as the app reads them).
+func foldMore(body string) string {
+	if !strings.Contains(strings.ToLower(body), "[more]") {
+		return body
+	}
+	var out []string
+	open := false
+	for _, line := range strings.Split(body, "\n") {
+		switch strings.ToLower(strings.TrimSpace(line)) {
+		case "[more]":
+			if !open {
+				out = append(out, "…")
+			}
+			open = !open
+			continue
+		case "[/more]":
+			if open {
+				open = false
+				continue
+			}
+		}
+		if !open {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // truncateRunes shortens s to at most n runes, adding an ellipsis when it cuts.
