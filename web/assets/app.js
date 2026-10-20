@@ -195,7 +195,7 @@ const state = {
   atBottom: true,
   editingId: null,         // message id being edited in the composer
   lastReadSent: new Map(), // channelId -> last message id POSTed to /read
-  membersRefresh: null,    // live members-modal refresh hook
+  membersRefresh: null,    // live refresh hook of the details' Members section
   pinsRefresh: null,       // live pins-modal refresh hook
 };
 
@@ -1954,8 +1954,6 @@ function renderChannelHeader() {
     joinBtn.hidden = !ch || isDM || ch.is_member;
     joinBtn.textContent = isNote ? 'Join note' : 'Join channel';
   }
-  const membersBtn = byId('members-btn');
-  if (membersBtn) membersBtn.hidden = !ch || isDM;
   const muteBtn = byId('mute-btn');
   if (muteBtn) {
     const muted = isMuted(ch);
@@ -4571,7 +4569,7 @@ function connectSSE() {
     if (ch) {
       ch.members = members;
       ch.member_count = member_count;
-      if (state.me && members && ch.kind === 'channel') {
+      if (state.me && members && ch.kind !== 'dm') {
         ch.is_member = members.includes(state.me.id);
       }
       forgetPrivateChannel(channel_id); // removed from a private channel → drop it
@@ -5497,13 +5495,16 @@ function openNewChannelModal() {
   });
 }
 
-// #info-btn: reuse the new-channel form to rename / retopic, plus leave.
+// #info-btn: reuse the new-channel form to rename / retopic, then who is in
+// it (see mountMembers), then leave and delete.
 function openChannelInfoModal() {
   if (state.latest) { openLatestModal(); return; } // device-local toggles: fine offline
   if (blockedOffline('Channel details')) return;
   const ch = state.channels.get(state.currentId);
   if (!ch || ch.kind === 'dm') return;
-  const m = openModal('tpl-modal-new-channel');
+  const m = openModal('tpl-modal-new-channel', {
+    onClose: () => { state.membersRefresh = null; },
+  });
   if (!m) return;
   // Same form as "New channel", but this is the channel's details.
   const isNote = ch.kind === 'note';
@@ -5533,6 +5534,8 @@ function openChannelInfoModal() {
   }
   if (nameEl) nameEl.disabled = !canEdit;
   if (topicEl) topicEl.disabled = !canEdit;
+
+  mountMembers(form, ch, canEdit);
 
   if (ch.is_member) {
     const leave = document.createElement('button');
@@ -5662,57 +5665,56 @@ function openNewDMModal() {
   render();
 }
 
-/* -------- members */
+/* -------- members: a section of the details modal. Changes apply at once
+   (no Save); the creator or an admin can remove people, and anyone in it can
+   add people — matches show only while something is typed. */
 
-async function openMembersModal() {
-  if (blockedOffline('Members')) return;
-  const chId = state.currentId;
-  const ch = state.channels.get(chId);
-  if (!ch || ch.kind === 'dm') return;
-  const m = openModal('tpl-modal-members', {
-    onClose: () => { state.membersRefresh = null; },
-  });
-  if (!m) return;
-  const listEl = m.q('.members-list');
-  const addInput = m.q('.member-add-input');
-  const addList = m.q('.member-add-list');
-  const titleEl = m.q('.members-title');
+async function mountMembers(form, ch, canManage) {
+  const sec = tpl('tpl-members-section');
+  if (!sec) return;
+  form.append(sec);
+  const chId = ch.id;
+  const listEl = sec.querySelector('.members-list');
+  const countEl = sec.querySelector('.members-count');
+  const addRow = sec.querySelector('.member-add');
+  const addInput = sec.querySelector('.member-add-input');
+  const addList = sec.querySelector('.member-add-list');
+  const noun = ch.kind === 'note' ? 'note' : 'channel';
 
   let members = ch.members || null;
-
-  const canManage = () => state.me && (state.me.is_admin || ch.created_by === state.me.id);
+  const canAdd = () => ch.is_member || canManage;
 
   const render = () => {
-    if (titleEl) {
-      titleEl.textContent = `${chanLabel(ch)} — ${ch.member_count || (members ? members.length : 0)} member${(ch.member_count || 0) === 1 ? '' : 's'}`;
-    }
+    const n = ch.member_count || (members ? members.length : 0);
+    if (countEl) countEl.textContent = members ? String(n) : '';
     if (listEl) {
       listEl.textContent = '';
       for (const uid of members || []) {
         const u = state.users.get(uid) || { id: uid, display_name: `User #${uid}`, avatar_color: 0 };
-        const row = memberRow(u, { removable: canManage() && uid !== state.me.id });
+        const row = memberRow(u, { removable: canManage && uid !== state.me.id });
         if (row) listEl.append(row);
       }
     }
+    setHidden(addRow, !canAdd());
     renderAddList();
   };
 
   const renderAddList = () => {
     if (!addList) return;
     addList.textContent = '';
-    if (!ch.is_member && !canManage()) return;
     const needle = addInput ? addInput.value.trim() : '';
+    if (!needle || !canAdd()) return;
     const memberSet = new Set(members || []);
     const candidates = [...state.users.values()]
       // Bots stay out of the picker; a token's bot user is enrolled into a
       // private channel via the CLI's /slock invite instead.
       .filter((u) => !memberSet.has(u.id) && !u.is_bot)
-      .map((u) => ({ u, score: needle ? fuzzyScore(needle, u.display_name) : 0 }))
+      .map((u) => ({ u, score: fuzzyScore(needle, u.display_name) }))
       .filter((x) => x.score >= 0)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 12);
+      .slice(0, 8);
     for (const { u } of candidates) {
-      const row = memberRow(u, { meta: 'Add to channel' });
+      const row = memberRow(u, { meta: `Add to ${noun}` });
       if (row) {
         row.classList.add('member--addable');
         addList.append(row);
@@ -5727,6 +5729,19 @@ async function openMembersModal() {
   };
 
   on(addInput, 'input', renderAddList);
+  // Enter adds the best match; Escape clears the search before the modal.
+  on(addInput, 'keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault(); // not the details form's submit
+      const first = addList && addList.querySelector('.member');
+      if (first) first.click();
+    } else if (e.key === 'Escape' && addInput.value) {
+      e.preventDefault();
+      e.stopPropagation();
+      addInput.value = '';
+      renderAddList();
+    }
+  });
   if (addList) {
     addList.addEventListener('click', async (e) => {
       const row = e.target.closest('.member');
@@ -5737,6 +5752,7 @@ async function openMembersModal() {
         members = [...(members || []), uid];
         ch.members = members;
         ch.member_count = (ch.member_count || members.length - 1) + 1;
+        if (addInput) { addInput.value = ''; addInput.focus(); }
         render();
       } catch { /* toasted */ }
     });
@@ -5760,6 +5776,7 @@ async function openMembersModal() {
     });
   }
 
+  render();
   if (!members) {
     try {
       const data = await api(`/api/channels/${chId}`);
@@ -5770,8 +5787,8 @@ async function openMembersModal() {
     } catch {
       members = [];
     }
+    if (sec.isConnected) render();
   }
-  render();
 }
 
 /* -------- close a DM conversation (#close-dm-btn) — purely visual, this
@@ -7918,7 +7935,6 @@ function wireHeader() {
       maybeMarkRead();
     } catch { /* toasted */ }
   });
-  on(byId('members-btn'), 'click', openMembersModal);
   on(byId('mute-btn'), 'click', toggleMute);
   on(byId('files-btn'), 'click', openFilesModal);
   on(byId('pins-btn'), 'click', openPinsModal);

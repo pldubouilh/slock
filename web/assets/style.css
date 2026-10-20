@@ -255,6 +255,10 @@ h1, h2, h3 { font-weight: 700; line-height: 1.25; }
   padding: 3px 5px;
   user-select: none;
 }
+/* the search bar's ⌘K is an SVG (see index.html): its ink is centred in its
+   box, so equal padding centres it exactly */
+.kbd--glyph { padding: 4px 5px; }
+.kbd--glyph svg { display: block; }
 
 .btn {
   display: inline-flex;
@@ -2285,7 +2289,46 @@ input[type="checkbox"] {
 .member-remove { margin-inline-start: auto; width: 28px; height: 28px; }
 .member-remove:hover { color: var(--danger); }
 
-.member-add { display: flex; flex-direction: column; gap: var(--sp-2); }
+/* Members, inside a channel's or note's details: below the form's Save, set
+   off by a hairline; "Members  4" heads a list, and "Add people…" (with a
+   person-plus icon in the field) shows matches only while typed into */
+.members-sec {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.members-sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.members-sec-head .field-label { margin-top: 0; }
+.members-count {
+  padding: 0 7px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--text-3);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  line-height: 1.6;
+}
+.members-count:empty { display: none; }
+.members-sec .members-list { max-height: 220px; }
+.member-add { position: relative; display: flex; align-items: center; }
+.member-add[hidden] { display: none; }
+.member-add-ic {
+  position: absolute;
+  inset-inline-start: 11px;
+  color: var(--text-3);
+  pointer-events: none;
+}
+.member-add .member-add-input { padding-inline-start: 34px; }
+.member-add:focus-within .member-add-ic { color: var(--accent); }
+.member--addable { cursor: pointer; }
+.member--addable .member-meta { color: var(--accent); }
 
 /* profile picture controls */
 .avatar-row {

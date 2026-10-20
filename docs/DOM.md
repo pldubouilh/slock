@@ -105,12 +105,13 @@ strings, so the templates are where message/row structure lives.
       #channel-title        e.g. "# design" or a person's name
       #channel-topic        sits inline to the right of the title; JS toggles
                             [hidden] when the channel has no topic
-      #channel-actions      holds #members-btn, #join-btn, #mute-btn (bell icon,
+      #channel-actions      holds #join-btn, #mute-btn (bell icon,
                       `.bell-plain`/`.bell-slash` toggled by mute state),
                       #pins-btn (pinned-messages modal),
                       #pin-channel-btn (pins this channel/DM to the sidebar so
                       it survives collapse — .is-on when pinned; works for DMs),
-                      #files-btn (channel attachments modal), #info-btn,
+                      #files-btn (channel attachments modal), #info-btn
+                      (details: name, topic, privacy, members, leave, delete),
                       #close-dm-btn (DMs only: hides the conversation from
                       the rail on this device — localStorage
                       ["slock:closed-dms"], purely visual, server untouched;
@@ -296,10 +297,9 @@ which uses `.modal-open` on `<body>` for scroll locking. Close buttons carry
 `.modal-close`; the backdrop is `.modal-backdrop`.
 
 - `#tpl-modal-new-channel` → form `.mform` with `[name=name]`, `[name=topic]`,
-  `[name=is_private]`, `.mform-error`, submit `.mform-submit`
+  `[name=is_private]`, `.mform-error`, submit `.mform-submit`. As a channel's or note's details (#info-btn) JS appends a `#tpl-members-section` clone, then `.mform-leave` / `.mform-delete`
 - `#tpl-modal-new-dm` → `.dm-picker-input`, `.dm-picker-list`
-- `#tpl-modal-members` → `.members-list`, `.member-add-input`,
-  `.member-add-list`, `.members-title`
+- `#tpl-members-section` → `section.members-sec`: `.members-sec-head` (`.field-label` + `.members-count`), `.members-list`, `.member-add` (JS hides it unless you may add people; holds `.member-add-ic` and `.member-add-input`), `.member-add-list` (matches, `.member--addable`, only while the input has text; Enter adds the first)
 - `#tpl-modal-profile` → `[name=display_name]`, `[name=status_text]`,
   `.color-swatches` (JS fills with `button.swatch[data-color]`),
   `.mform-error`, `.mform-submit`, `.mform-about` (small print: repo link and

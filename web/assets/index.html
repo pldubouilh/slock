@@ -33,7 +33,8 @@
       </div>
       <button id="search-trigger" type="button" aria-label="Search" title="Search (⌘K)">
         <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 4.3 4.3"/></svg>
-        <kbd class="kbd">⌘K</kbd>
+        <!-- ⌘K drawn rather than typed: a font's ⌘ sits off-centre in the box -->
+        <kbd class="kbd kbd--glyph" aria-label="⌘K"><svg viewBox="-0.1 0 18 10" width="16.2" height="9" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 3.5V2.25a1.25 1.25 0 1 0-1.25 1.25h5.5a1.25 1.25 0 1 0-1.25-1.25v5.5a1.25 1.25 0 1 0 1.25-1.25h-5.5a1.25 1.25 0 1 0 1.25 1.25Z"/><path d="M12 1v8M16.6 1 12 5.6M13.7 3.9 16.8 9"/></svg></kbd>
       </button>
     </div>
 
@@ -159,9 +160,6 @@
       </div>
       <div id="channel-actions">
         <button id="join-btn" class="btn btn--primary btn--sm" type="button" hidden>Join channel</button>
-        <button id="members-btn" class="iconbtn" type="button" aria-label="Members" title="Members">
-          <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="7" r="3"/><path d="M2.5 16.5c0-2.8 2.2-4.5 5-4.5s5 1.7 5 4.5"/><path d="M13 4.4a3 3 0 0 1 0 5.2"/><path d="M14.6 12.3c1.8.7 2.9 2.1 2.9 4.2"/></svg>
-        </button>
         <button id="pins-btn" class="iconbtn" type="button" aria-label="Pinned messages" title="Pinned messages">
           <svg class="ic" viewBox="0 0 20 20" width="18" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 2.8l2.3 4.6 5.1.7-3.7 3.6.9 5.1-4.6-2.4-4.6 2.4.9-5.1L2.6 8.1l5.1-.7Z"/></svg>
         </button>
@@ -570,26 +568,22 @@
   </div>
 </template>
 
-<template id="tpl-modal-members">
-  <div class="modal-wrap">
-    <div class="modal-backdrop"></div>
-    <section class="modal" role="dialog" aria-modal="true" aria-label="Members">
-      <header class="modal-head">
-        <h2 class="modal-title members-title">Members</h2>
-        <button type="button" class="iconbtn modal-close" aria-label="Close">
-          <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg>
-        </button>
-      </header>
-      <div class="modal-body">
-        <ul class="members-list picker-list"></ul>
-        <div class="member-add">
-          <h3 class="field-label">Add people</h3>
-          <input class="member-add-input" type="search" placeholder="Search people…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Search people to add">
-          <ul class="member-add-list picker-list"></ul>
-        </div>
-      </div>
-    </section>
-  </div>
+<!-- the Members part of a channel's or note's details: who is in it, a
+     remove button per person for the creator / an admin, and "Add people…",
+     whose matches show only while something is typed -->
+<template id="tpl-members-section">
+  <section class="members-sec">
+    <h3 class="members-sec-head">
+      <span class="field-label">Members</span>
+      <span class="members-count"></span>
+    </h3>
+    <ul class="members-list picker-list"></ul>
+    <div class="member-add">
+      <svg class="ic member-add-ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="7" r="3"/><path d="M2.5 16.5c0-2.8 2.4-4.5 5.5-4.5 1.2 0 2.3.3 3.2.7"/><path d="M15.5 11.5v5M13 14h5"/></svg>
+      <input class="member-add-input" type="search" placeholder="Add people…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Add people">
+    </div>
+    <ul class="member-add-list picker-list"></ul>
+  </section>
 </template>
 
 <template id="tpl-modal-files">
