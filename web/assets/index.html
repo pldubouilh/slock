@@ -47,20 +47,24 @@
             <span class="chan-name">Latest</span>
           </button>
         </li>
-        <!-- Notes: shared plain-text notes, listed under this row (#note-list);
-             the row folds and unfolds the list, + starts a new note -->
-        <li id="notes-row" class="chan chan--member chan-group chan-group--open">
-          <button type="button" class="chan-btn" aria-expanded="true" aria-controls="note-list" title="Fold notes">
-            <svg class="ic chan-icon" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2.5h7l3 3v11a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1Z"/><path d="M7.5 9h5M7.5 12h5M7.5 15h3"/></svg>
-            <span class="chan-name">Notes</span>
-            <svg class="ic collapse-ic notes-chev" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.5l5 5 5-5"/></svg>
-          </button>
-          <button id="new-note-btn" class="iconbtn notes-add" type="button" aria-label="New note" title="New note">
-            <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>
-          </button>
-        </li>
       </ul>
-      <ul id="note-list" class="side-list side-list--notes"></ul>
+
+      <!-- Notes: shared plain-text notes. The chevron folds the whole list
+           (the open note stays), + starts a new note. -->
+      <section class="side-sec">
+        <div class="side-sec-head">
+          <h2>Notes</h2>
+          <div class="side-sec-actions">
+            <button id="fold-notes" class="iconbtn fold-btn" type="button" aria-label="Fold notes" title="Fold notes" aria-pressed="false" aria-controls="note-list">
+              <svg class="ic collapse-ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7.5l5 5 5-5"/></svg>
+            </button>
+            <button id="new-note-btn" class="iconbtn" type="button" aria-label="New note" title="New note">
+              <svg class="ic" viewBox="0 0 20 20" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4.5v11M4.5 10h11"/></svg>
+            </button>
+          </div>
+        </div>
+        <ul id="note-list" class="side-list side-list--notes"></ul>
+      </section>
 
       <section class="side-sec">
         <div class="side-sec-head">
@@ -154,7 +158,7 @@
         <svg class="ic" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="2"/><path d="M8 4v12"/></svg>
       </button>
       <div class="header-titles">
-        <svg id="title-lock" class="ic" viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-label="Private channel" hidden><rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/></svg>
+        <svg id="title-lock" class="ic" viewBox="0 0 15 15" width="20" height="20" fill="currentColor" stroke="none" aria-label="Private channel" hidden><path fill-rule="evenodd" d="M4 7V4.5a3.5 3.5 0 0 1 7 0V7h.5A1.5 1.5 0 0 1 13 8.5v4a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2 12.5v-4A1.5 1.5 0 0 1 3.5 7ZM6 7h3V4.5a1.5 1.5 0 0 0-3 0Z"/></svg>
         <h1 id="channel-title"></h1>
         <p id="channel-topic"></p>
       </div>
@@ -392,7 +396,7 @@
   <li class="chan">
     <button type="button" class="chan-btn">
       <svg class="ic chan-icon chan-hash" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.7 3.5 6.2 16.5M13.8 3.5l-1.5 13M4 7.3h13M3 12.7h13"/></svg>
-      <svg class="ic chan-icon chan-lock" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/></svg>
+      <svg class="ic chan-icon chan-lock" viewBox="0 0 15 15" width="15" height="15" fill="currentColor" stroke="none" aria-hidden="true"><path fill-rule="evenodd" d="M4 7V4.5a3.5 3.5 0 0 1 7 0V7h.5A1.5 1.5 0 0 1 13 8.5v4a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2 12.5v-4A1.5 1.5 0 0 1 3.5 7ZM6 7h3V4.5a1.5 1.5 0 0 0-3 0Z"/></svg>
       <span class="chan-name"></span>
       <svg class="ic row-draft" viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="Draft"><path d="M12.8 3.7a1.8 1.8 0 0 1 2.5 2.5l-8.5 8.6-3.4.9.9-3.4 8.5-8.6Z"/></svg>
       <svg class="ic row-pin" viewBox="0 0 20 20" width="12" height="12" fill="currentColor" stroke="none" aria-hidden="true"><path d="M11.5 2.4a1 1 0 0 1 1.6 0l4.5 4.5a1 1 0 0 1 0 1.6l-.7.5-3.2-3.2.5-.7-4.1 2.1-1.8 1.8 5 5-1.8 1.8-2.6-2.6-3.9 3.9-1-1 3.9-3.9L4.8 9.9l1.8-1.8 5-5Z"/></svg>
@@ -403,12 +407,12 @@
 
 <!-- one note under the Notes row; private ones end with a small lock -->
 <template id="tpl-note-item">
-  <li class="chan chan--nested note-item">
+  <li class="chan note-item">
     <button type="button" class="chan-btn">
       <svg class="ic chan-icon" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2.5h7l3 3v11a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1Z"/><path d="M7.5 9h5M7.5 12h5"/></svg>
       <span class="chan-name"></span>
       <svg class="ic row-pin" viewBox="0 0 20 20" width="12" height="12" fill="currentColor" stroke="none" aria-hidden="true"><path d="M11.5 2.4a1 1 0 0 1 1.6 0l4.5 4.5a1 1 0 0 1 0 1.6l-.7.5-3.2-3.2.5-.7-4.1 2.1-1.8 1.8 5 5-1.8 1.8-2.6-2.6-3.9 3.9-1-1 3.9-3.9L4.8 9.9l1.8-1.8 5-5Z"/></svg>
-      <svg class="ic row-lock" viewBox="0 0 20 20" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-label="Private"><rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/></svg>
+      <svg class="ic row-lock" viewBox="0 0 15 15" width="12" height="12" fill="currentColor" stroke="none" aria-label="Private"><path fill-rule="evenodd" d="M4 7V4.5a3.5 3.5 0 0 1 7 0V7h.5A1.5 1.5 0 0 1 13 8.5v4a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2 12.5v-4A1.5 1.5 0 0 1 3.5 7ZM6 7h3V4.5a1.5 1.5 0 0 0-3 0Z"/></svg>
     </button>
   </li>
 </template>

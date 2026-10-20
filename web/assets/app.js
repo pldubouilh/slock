@@ -1831,7 +1831,8 @@ async function loadOlderLatest() {
 
 const LATEST_ICON = {
   hash: '<path d="M7.7 3.5 6.2 16.5M13.8 3.5l-1.5 13M4 7.3h13M3 12.7h13"/>',
-  lock: '<rect x="4.5" y="9" width="11" height="7.5" rx="1.8"/><path d="M7 9V6.8a3 3 0 0 1 6 0V9"/>',
+  // the sidebar's lock: one filled shape, on its own 15-unit grid
+  lock: '<svg viewBox="0 0 15 15"><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M4 7V4.5a3.5 3.5 0 0 1 7 0V7h.5A1.5 1.5 0 0 1 13 8.5v4a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2 12.5v-4A1.5 1.5 0 0 1 3.5 7ZM6 7h3V4.5a1.5 1.5 0 0 0-3 0Z"/></svg>',
   dm: '<path d="M4 4.5h12a1.5 1.5 0 0 1 1.5 1.5v7a1.5 1.5 0 0 1-1.5 1.5H9l-3.5 3v-3H4A1.5 1.5 0 0 1 2.5 13V6A1.5 1.5 0 0 1 4 4.5Z"/>',
   notes: '<path d="M5.5 2.5h7l3 3v11a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-13a1 1 0 0 1 1-1Z"/><path d="M7.5 9h5M7.5 12h5M7.5 15h3"/>',
 };
@@ -2801,7 +2802,8 @@ function openPersonalNote() {
   if (target) openChannel(target.id);
 }
 
-/* -------- the Notes list in the sidebar: the Notes row folds it */
+/* -------- the Notes section in the sidebar: its chevron (#fold-notes) folds
+   the whole list */
 
 let foldNotes = false;
 try { foldNotes = localStorage.getItem(LS.foldNotes) === '1'; } catch { /* default open */ }
@@ -2827,14 +2829,13 @@ function setNotesFolded(on) {
 
 function renderNoteList() {
   const list = byId('note-list');
-  const row = byId('notes-row');
-  if (row) {
-    row.classList.toggle('chan-group--open', !foldNotes);
-    const btn = row.querySelector('.chan-btn');
-    if (btn) {
-      btn.setAttribute('aria-expanded', foldNotes ? 'false' : 'true');
-      btn.title = foldNotes ? 'Show notes' : 'Fold notes';
-    }
+  const btn = byId('fold-notes');
+  if (btn) {
+    // Like the Channels header's chevron: accent and flipped while folded.
+    btn.classList.toggle('is-on', foldNotes);
+    btn.setAttribute('aria-pressed', foldNotes ? 'true' : 'false');
+    btn.title = foldNotes ? 'Show all notes' : 'Fold notes';
+    btn.setAttribute('aria-label', btn.title);
   }
   if (!list) return;
   list.textContent = '';
@@ -8018,7 +8019,7 @@ function wireSidebar() {
   on(byId('dm-list'), 'click', open);
   on(byId('latest-row'), 'click', () => openLatest());
   on(byId('note-list'), 'click', open);
-  on(byId('notes-row') && byId('notes-row').querySelector('.chan-btn'), 'click', () => setNotesFolded(!foldNotes));
+  on(byId('fold-notes'), 'click', () => setNotesFolded(!foldNotes));
   on(byId('new-note-btn'), 'click', openNewNoteModal);
   on(noteEditor(), 'input', () => {
     const s = noteSessions.get(noteViewId);

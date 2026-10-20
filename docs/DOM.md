@@ -59,12 +59,11 @@ strings, so the templates are where message/row structure lives.
                         / app badge and blip; a folded-away, un-surfaced channel
                         does none of that. The section head (with its controls)
                         always stays so the fold can be undone.
-    #notes-row              the Notes row under Latest (.chan-group): clicking
-                        its .chan-btn folds / unfolds #note-list
-                        (localStorage["slock:fold-notes"]; without
-                        .chan-group--open the .notes-chev flips). Folded, only the open note stays.
-                        #new-note-btn (.notes-add, the + at the row end, right
-                        of the chevron) opens the new-note form
+    Notes section           a .side-sec under Latest, headed "Notes" like
+                        Channels: #fold-notes (.fold-btn chevron, .is-on and
+                        flipped while folded; localStorage["slock:fold-notes"])
+                        folds the whole #note-list, only the open note stays;
+                        #new-note-btn (+) opens the new-note form
     #note-list              <ul>, JS fills with #tpl-note-item clones: pinned,
                         then joined, your Personal note first, then by title.
                         Unjoined public notes follow the "Unjoined channels"
@@ -267,7 +266,7 @@ write `textContent` on the avatar element itself — that would delete the image
   `.chan-group--open`; the button carries `aria-expanded`)
   - asterisk `.chan-icon`, `.chan-name` ("bd-*"), `.row-draft`, `.chan-badge`
     (unread of the hidden channels), `.chan-group-chev` (turns when open)
-- `#tpl-note-item` → `.chan.chan--nested.note-item` (dataset.id;
+- `#tpl-note-item` → `.chan.note-item` (dataset.id;
   `.chan--active`, `.chan--member`, `.chan--pinned`)
   - document `.chan-icon`, `.chan-name` (the title), `.row-pin`, `.row-lock`
     (JS toggles `[hidden]`; shown on private notes)

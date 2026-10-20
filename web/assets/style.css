@@ -551,21 +551,6 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 .chan-group--open .chan-group-chev { transform: rotate(90deg); }
 .chan--nested .chan-btn { padding-inline-start: 16px; }
 
-/* the Notes row folds the note list under it; its chevron and + (new note)
-   are the Channels header's: the chevron points down while open and flips
-   when folded, the + sits at the row end */
-#notes-row { position: relative; }
-.notes-chev { flex-shrink: 0; color: var(--text-3); }
-#notes-row:not(.chan-group--open) .notes-chev { transform: rotate(180deg); }
-#notes-row > .chan-btn { padding-inline-end: 36px; }
-.notes-add {
-  position: absolute;
-  inset-inline-end: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 26px;
-  height: 26px;
-}
 /* a private note ends with a small lock */
 .row-lock { flex-shrink: 0; color: var(--text-3); opacity: 0.7; }
 
