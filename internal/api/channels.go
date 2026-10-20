@@ -183,7 +183,19 @@ func (s *Server) channelBasics(ctx context.Context, channelID int64) (*channelBa
 
 // canAdminChannel reports whether the user may rename a channel or remove members.
 func canAdminChannel(b *channelBasics, u *db.User) bool {
-	return u.IsAdmin || (b.CreatedBy != nil && *b.CreatedBy == u.ID)
+	creator := b.CreatedBy != nil && *b.CreatedBy == u.ID
+	if privateNote(b) {
+		return creator
+	}
+	return u.IsAdmin || creator
+}
+
+// privateNote: a private note belongs to its people alone, like a DM — a
+// workspace admin has no say over one they are not in (no renaming, making it
+// public, adding themselves or deleting it). Personal notes hold what used to
+// be everyone's DM with themselves.
+func privateNote(b *channelBasics) bool {
+	return b.Kind == db.KindNote && b.IsPrivate
 }
 
 // requireChannelAdmin gates channel management: workspace admins, or the
@@ -194,7 +206,7 @@ func (s *Server) requireChannelAdmin(ctx context.Context, b *channelBasics, u *d
 	if !canAdminChannel(b, u) {
 		return httpx.ErrForbidden
 	}
-	if u.IsAdmin {
+	if u.IsAdmin && !privateNote(b) {
 		return nil
 	}
 	return s.requireMembership(ctx, b.ID, u)
@@ -734,7 +746,7 @@ func (s *Server) handleAddMember(w http.ResponseWriter, r *http.Request) error {
 	if basics.Kind == db.KindDM {
 		return httpx.ErrForbidden
 	}
-	if !me.IsAdmin {
+	if !me.IsAdmin || privateNote(basics) {
 		member, err := s.isMember(ctx, id, me.ID)
 		if err != nil {
 			return err

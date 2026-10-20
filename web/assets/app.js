@@ -5693,7 +5693,10 @@ function openChannelInfoModal() {
   const privEl = form.querySelector('[name=is_private]');
   if (nameEl) nameEl.value = ch.name;
   if (topicEl) topicEl.value = ch.topic || '';
-  const canEdit = state.me && (state.me.is_admin || ch.created_by === state.me.id);
+  // A workspace admin may manage any channel and any public note, but not a
+  // private note they did not create (the server refuses: see privateNote).
+  const creator = !!state.me && ch.created_by === state.me.id;
+  const canEdit = !!state.me && (creator || (state.me.is_admin && !(isNote && ch.is_private)));
   if (privEl) {
     privEl.checked = !!ch.is_private;
     privEl.disabled = !canEdit; // an admin/creator can flip it after creation
