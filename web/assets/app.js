@@ -1460,6 +1460,8 @@ function markHistory(channelId, replace, guard) {
   const url = '/?c=' + channelId;
   if (replace) history.replaceState(entry, '', url);
   else history.pushState(entry, '', url);
+  // The new entry may start out with the old one's title (and its "(1)").
+  refreshBadgesAfterHistory();
 }
 
 async function openChannel(channelId, opts = {}) {
@@ -3012,13 +3014,96 @@ function workspaceTitle() {
   return name === PRODUCT_NAME ? PRODUCT_NAME : `${name} - ${PRODUCT_NAME}`;
 }
 
-function updateBadges() {
+// The window title, the favicon's red dot and the installed app's badge all
+// say how many unread messages wait.
+//
+// `force` is for after a history move (Back, Forward, our own pushState). The
+// browser keeps a title per history entry and puts that entry's back on
+// Back — the "(1)" from before you read it — while the page's own
+// document.title still reads "slock". Assigning "slock" again is then not a
+// change, so the browser is never told and the stale "(1)" stays. Forcing
+// goes through a different title first, so the real one is a change. The same
+// goes for the favicon, which is re-linked.
+function updateBadges(force) {
   const n = totalUnread();
   const title = workspaceTitle();
-  document.title = n > 0 ? `(${n}) ${title}` : title;
+  const want = n > 0 ? `(${n}) ${title}` : title;
+  if (force) document.title = want + '\u200b';
+  document.title = want;
+  updateFavicon(n > 0, force);
   if ('setAppBadge' in navigator) {
     (n > 0 ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
   }
+}
+
+// After a history move the browser may still be committing the entry when our
+// first rewrite lands; a second one shortly after settles it either way.
+function refreshBadgesAfterHistory() {
+  updateBadges(true);
+  setTimeout(() => updateBadges(true), 60);
+}
+
+/* -------- favicon: the stock icon, with a red dot while anything is unread.
+   Drawn once on a canvas (same-origin, so it stays readable) and cached as a
+   data URL; the plain icon is the page's own href. */
+
+let faviconPlain = '';  // the <link rel=icon> href from the page
+let faviconDotted = ''; // data: URL of the icon with the dot, once drawn
+let faviconDrawing = false;
+let faviconWantDot = false;
+
+function faviconLink() {
+  return document.querySelector('link[rel="icon"]');
+}
+
+function drawDottedFavicon() {
+  if (faviconDrawing || !faviconPlain) return;
+  faviconDrawing = true;
+  const img = new Image();
+  img.onload = () => {
+    const size = 64;
+    const c = document.createElement('canvas');
+    c.width = size;
+    c.height = size;
+    const g = c.getContext('2d');
+    if (!g) return;
+    g.drawImage(img, 0, 0, size, size);
+    // Clear a ring around the dot so it reads on any icon colour and tab theme.
+    const x = size - 15, y = 15, r = 13;
+    g.globalCompositeOperation = 'destination-out';
+    g.beginPath();
+    g.arc(x, y, r + 4, 0, Math.PI * 2);
+    g.fill();
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = '#e5484d';
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+    try { faviconDotted = c.toDataURL('image/png'); } catch { return; }
+    if (faviconWantDot) setFaviconHref(faviconDotted, true);
+  };
+  img.onerror = () => { faviconDrawing = false; }; // try again next time
+  img.src = faviconPlain;
+}
+
+// Swap the icon. Re-linking (a fresh element) makes the browser pick it up
+// even when the href is unchanged, which a history move needs.
+function setFaviconHref(href, relink) {
+  const link = faviconLink();
+  if (!link) return;
+  if (!relink && link.getAttribute('href') === href) return;
+  const fresh = link.cloneNode();
+  fresh.setAttribute('href', href);
+  link.replaceWith(fresh);
+}
+
+function updateFavicon(dot, force) {
+  const link = faviconLink();
+  if (!link) return;
+  if (!faviconPlain) faviconPlain = link.getAttribute('href') || '';
+  faviconWantDot = dot;
+  if (dot && !faviconDotted) { drawDottedFavicon(); return; }
+  setFaviconHref(dot ? faviconDotted : faviconPlain, force);
 }
 
 /* ============================================================ composer */
@@ -8101,9 +8186,9 @@ function wireBackButton() {
   };
   if (guarded) trap();
   window.addEventListener('popstate', (e) => {
-    // Browsers may put back the title the entry was created under ("(1)" from
-    // before you read it): always rewrite it from the current unread state.
-    updateBadges();
+    // The browser puts back the title the entry was created under ("(1)"
+    // from before you read it): rewrite it, forced (see updateBadges).
+    refreshBadgesAfterHistory();
     if (guarded) {
       const closedSomething = (emojiPickerEl && (closeEmojiPicker(), true))
         || closeLightbox() || closePalette() || closeTopModal() || closeMeMenu()
