@@ -123,24 +123,66 @@ function copyText(text, label) {
 
 /* ============================================================ api */
 
+// The reads sw.js keeps (channel list, a channel's newest page, a note, …)
+// are answered from its store at once while it fetches the live copy behind
+// it. A caller that passes onFresh gets that live copy when it differs:
+// onFresh(data) once, later, or onFresh(null) when it turned out the same or
+// unreachable; fromStore.has(data) tells the stored answer. A caller that
+// must have the server's answer (a sync after a reconnect) passes fresh: true.
+let apiReqSeq = 0;
+const freshWaiters = new Map(); // X-Slock-Req id -> {onFresh, answered, early, timer}
+const fromStore = new WeakSet();
+// The worker always answers, but a worker stopped mid-fetch never does: past
+// this, the stored copy is taken as current (onFresh(null)), so nothing waits
+// on it forever — a channel left unread, unable to page back.
+const FRESH_WAIT_MS = 20000;
+
+function onApiFresh(msg) {
+  const w = freshWaiters.get(msg.id);
+  if (!w) return;
+  if (!w.answered) { w.early = msg; return; } // api() picks it up
+  freshWaiters.delete(msg.id);
+  clearTimeout(w.timer);
+  if (msg.status === 401) { location.href = '/login.html'; return; }
+  let data = null;
+  if (msg.body) { try { data = JSON.parse(msg.body); } catch { /* keep null */ } }
+  try { w.onFresh(data); } catch (err) { console.warn('fresh copy failed to apply', err); }
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'api-fresh') onApiFresh(e.data);
+  });
+}
+
 // One wrapper for every call: 401 → login page, parses {error, message},
 // toasts failures unless opts.toast === false. A FormData body is sent as
-// multipart (the browser sets the content type).
+// multipart (the browser sets the content type). onFresh / fresh: see above.
 async function api(path, opts = {}) {
-  const { method = 'GET', body, signal, toast: doToast = true } = opts;
+  const { method = 'GET', body, signal, toast: doToast = true, onFresh, fresh } = opts;
   const init = { method, signal, headers: {} };
-  // No live stream yet — booting, reconnecting, or a bad connection: ask the
-  // service worker for its saved copy served instantly (refreshed in the
-  // background). Cached messages in a beat beat a logo for ten seconds; the
-  // SSE hello that follows gap-fills and refetches, so nothing stays stale.
-  // With the stream up, reads are network-first exactly as before.
-  if (method === 'GET' && !state.connected) init.headers['X-Slock-Prefer-Cache'] = '1';
+  if (fresh) init.cache = 'no-cache'; // sw.js: network first
+  let reqId = '';
+  if (method === 'GET' && onFresh && !fresh) {
+    reqId = String(++apiReqSeq);
+    init.headers['X-Slock-Req'] = reqId;
+    freshWaiters.set(reqId, { onFresh, answered: false, early: null, timer: 0 });
+  }
   if (body instanceof FormData) {
     init.body = body;
   } else if (body !== undefined) {
     init.headers['Content-Type'] = 'application/json';
     init.body = JSON.stringify(body);
   }
+  try {
+    return await apiFetch(path, init, doToast, reqId);
+  } catch (err) {
+    freshWaiters.delete(reqId);
+    throw err;
+  }
+}
+
+async function apiFetch(path, init, doToast, reqId) {
   let res;
   try {
     res = await fetch(path, init);
@@ -171,6 +213,20 @@ async function api(path, opts = {}) {
     e.status = res.status;
     if (doToast) toast(e.message, true);
     throw e;
+  }
+  const w = reqId && freshWaiters.get(reqId);
+  if (w) {
+    if (!res.headers.get('X-Slock-Revalidating')) {
+      freshWaiters.delete(reqId); // the network answered: nothing follows
+    } else if (w.early) {
+      // The live copy beat this one here: answer with it instead.
+      freshWaiters.delete(reqId);
+      if (w.early.body) { try { return JSON.parse(w.early.body); } catch { /* the stored one, then */ } }
+    } else {
+      w.answered = true;
+      if (data && typeof data === 'object') fromStore.add(data);
+      w.timer = setTimeout(() => onApiFresh({ id: reqId, status: 0, body: null }), FRESH_WAIT_MS);
+    }
   }
   return data;
 }
@@ -231,6 +287,7 @@ function chanState(id) {
     st = {
       msgs: [], byId: new Map(), byClient: new Map(),
       loaded: false, loadingOlder: false, hasMore: true,
+      cached: false, // msgs are sw.js's stored page; the live one is coming
       olderRetryAt: 0, // don't re-ask for history before this (see loadOlder)
       stale: false, unreadStartId: null, jumpCount: 0,
       // Detached: showing a window around a jumped-to message rather than the
@@ -344,28 +401,46 @@ function applyUserUpdate(user) {
   }
 }
 
+// A user list from the server (after a stored one): merged in place, then
+// one repaint of everything that names people.
+function applyUserList(users) {
+  for (const u of users || []) {
+    const prev = state.users.get(u.id);
+    state.users.set(u.id, prev ? Object.assign(prev, u) : u);
+  }
+  if (state.me) state.users.set(state.me.id, state.me);
+  renderSidebar();
+  renderChannelHeader();
+  if (state.currentId) repaintMessages(state.currentId);
+}
+
 async function refetchChannels() {
   try {
     const startedAt = Date.now();
-    const data = await api('/api/channels', { toast: false });
-    setChannels(data, startedAt);
-    // setChannels keeps the open channel even when the list no longer has it.
-    // For a named channel or a note that means it is gone — deleted while this client
-    // was not listening, or no longer allowed — so move off it rather than sit
-    // on a channel every fetch refuses. (A DM can be legitimately unlisted.)
-    const cur = state.channels.get(state.currentId);
-    const listed = cur && (cur.kind === 'note' ? data.notes : data.channels);
-    if (cur && cur.kind !== 'dm' && !(listed || []).some((c) => c.id === cur.id)) {
-      dropDeletedChannel(cur.id, { gone: true });
-    }
-    renderSidebar();
-    renderChannelHeader();
-    updateBadges();
-    maybeMarkRead(); // reading the open channel now covers anything it brought
-    prefetchNotes(); // keep every note readable offline
+    const data = await api('/api/channels', { toast: false, fresh: true });
+    applyChannelList(data, startedAt);
   } catch (err) {
     if (err.code !== 'network') console.warn('channel refetch failed', err);
   }
+}
+
+// A channel list from the server: into state, and everything that shows it.
+function applyChannelList(data, startedAt) {
+  setChannels(data, startedAt);
+  // setChannels keeps the open channel even when the list no longer has it.
+  // For a named channel or a note that means it is gone — deleted while this client
+  // was not listening, or no longer allowed — so move off it rather than sit
+  // on a channel every fetch refuses. (A DM can be legitimately unlisted.)
+  const cur = state.channels.get(state.currentId);
+  const listed = cur && (cur.kind === 'note' ? data.notes : data.channels);
+  if (cur && cur.kind !== 'dm' && !(listed || []).some((c) => c.id === cur.id)) {
+    dropDeletedChannel(cur.id, { gone: true });
+  }
+  renderSidebar();
+  renderChannelHeader();
+  updateBadges();
+  maybeMarkRead(); // reading the open channel now covers anything it brought
+  prefetchNotes(); // keep every note readable offline
 }
 
 // Mark-read bookkeeping, so a channel list fetched around a read can't put
@@ -412,7 +487,7 @@ function forgetPrivateChannel(channelId) {
   state.channels.delete(channelId);
   state.chan.delete(channelId);
   noteSessions.delete(channelId);
-  forgetNoteOffline(channelId);
+  forgetOffline(channelId);
   if (state.currentId === channelId) {
     state.currentId = null;
     const next = sortedChannels().find((c) => c.is_member) || sortedChannels()[0] || sortedDMs()[0];
@@ -431,7 +506,7 @@ function dropDeletedChannel(channelId, opts = {}) {
   state.chan.delete(channelId);
   noteSessions.delete(channelId);
   noteCarets.delete(channelId);
-  forgetNoteOffline(channelId);
+  forgetOffline(channelId);
   mentionedChans.delete(channelId);
   if (isChannelPinned(channelId)) togglePinChannel(channelId, { quiet: true });
   writeOutbox(readOutbox().filter((e) => e.channel_id !== channelId));
@@ -1250,9 +1325,37 @@ function newestRealId(st) {
   return 0;
 }
 
+// The newest page. sw.js may answer with its stored copy (st.cached) and the
+// live one follows (freshHistory).
 async function loadHistory(channelId) {
+  const data = await api(`/api/channels/${channelId}/messages?limit=${HISTORY_PAGE}`, {
+    onFresh: (fresh) => freshHistory(channelId, fresh),
+  });
+  fillHistory(channelId, data);
+  chanState(channelId).cached = fromStore.has(data);
+}
+
+// The live newest page after a stored one (null: it was the same). It takes
+// the stored page's place, keeping what arrived live since, and redraws the
+// open channel; reading waited for it (see maybeMarkRead).
+function freshHistory(channelId, data) {
   const st = chanState(channelId);
-  const data = await api(`/api/channels/${channelId}/messages?limit=${HISTORY_PAGE}`);
+  if (!st.cached) return; // reloaded meanwhile
+  st.cached = false;
+  if (data && st.loaded && !st.hasNewer) {
+    const last = data.messages.length ? data.messages[data.messages.length - 1].id : 0;
+    const since = st.msgs.filter((m) => m.id > last);
+    fillHistory(channelId, { ...data, messages: data.messages.concat(since) });
+    if (channelId === state.currentId) {
+      placeUnreadDivider(channelId);
+      repaintMessages(channelId);
+    }
+  }
+  if (channelId === state.currentId) maybeMarkRead();
+}
+
+function fillHistory(channelId, data) {
+  const st = chanState(channelId);
   // Messages typed while offline have no server id yet — carry them over so a
   // (re)load never drops something the user is still trying to send. They belong
   // at the tail: they're the most recent thing in the channel.
@@ -1414,7 +1517,8 @@ function placeUnreadDivider(channelId) {
 
 async function loadOlder(channelId) {
   const st = chanState(channelId);
-  if (st.loadingOlder || !st.hasMore || !st.loaded) return false;
+  // Not from a stored page: the live one replaces it, and what was paged in.
+  if (st.loadingOlder || !st.hasMore || !st.loaded || st.cached) return false;
   // Scrolling fires this constantly, so a failed page must not be retried on
   // the very next event — offline that means hundreds of doomed requests a
   // minute, each one flashing the loader.
@@ -1599,18 +1703,20 @@ async function openChannel(channelId, opts = {}) {
 
   const st = chanState(channelId);
   // Not loaded, or a detached window opened plainly (not to jump somewhere):
-  // load the live end.
-  if (!st.loaded || (st.hasNewer && !opts.jumpTo)) {
+  // load the live end. sw.js answers at once when it has the page stored (the
+  // live one follows: freshHistory); without one, the previous channel must
+  // not stay on screen under this title for as long as the network takes.
+  const live = !st.loaded || (st.hasNewer && !opts.jumpTo);
+  if (live) {
     const loader = byId('message-loader');
-    if (loader) loader.hidden = false;
+    const blank = blankSoon(() => state.currentId === channelId);
     try {
       await loadHistory(channelId);
     } catch {
-      // Offline with nothing cached for this channel. Don't leave the previous
-      // channel's messages under the new title — that reads as if they belong
-      // here. Show the channel empty (any unsent messages we're holding still
-      // render); the offline banner already explains why there's no history.
-      // st.loaded stays false, so a reconnect refetches for real.
+      // Offline with nothing stored for this channel: show it empty (any
+      // unsent messages we're holding still render); the offline banner
+      // already explains why there's no history. st.loaded stays false, so a
+      // reconnect loads it for real.
       if (state.currentId === channelId) {
         renderMessagesFull(channelId);
         restoreDraft(channelId);
@@ -1618,34 +1724,67 @@ async function openChannel(channelId, opts = {}) {
       }
       return;
     } finally {
+      clearTimeout(blank);
       if (loader) loader.hidden = true;
     }
-  } else if (st.stale || ch.unread_count > 0 || behindServer(ch, st)) {
-    // Catch up before showing (and marking read): unread messages we may not
-    // hold, or newer ones the server has that we missed.
-    await gapFill(channelId);
+    if (state.currentId !== channelId) return; // user moved on mid-load
   }
-  if (state.currentId !== channelId) return; // user moved on mid-load
+  // A loaded channel paints from memory at once and catches up after:
+  // catching up first left the previous channel on screen meanwhile. Unread
+  // messages we may not hold yet hold the divider back, as does a stored page
+  // (freshHistory places it): it would land among older ones.
+  const behind = !live && (st.stale || behindServer(ch, st));
   // Opening at the bottom: whatever piled up from scrolling back last time
   // goes, before it's drawn.
   if (!opts.jumpTo) trimOldMessages(channelId, false);
-
   st.jumpCount = 0;
-  placeUnreadDivider(channelId); // fresh each visit, not a stale leftover
+  if (behind || st.cached) st.unreadStartId = null;
+  else placeUnreadDivider(channelId); // fresh each visit, not a stale leftover
   renderMessagesFull(channelId);
-
-  if (opts.jumpTo) {
-    await jumpToMessage(channelId, opts.jumpTo);
-  } else {
-    state.atBottom = true;
-    scrollToBottom();
-  }
+  state.atBottom = true; // a jump moves on from here
+  scrollToBottom();
   updateJumpLatest();
   renderTyping();
-  maybeMarkRead();
   restoreDraft(channelId);
   const input = byId('composer-input');
   if (input && !opts.noFocus && matchMedia('(min-width: 700px)').matches) input.focus();
+
+  if (!live && (behind || ch.unread_count > 0)) {
+    await gapFill(channelId);
+    if (state.currentId !== channelId) return;
+    if (behind) {
+      placeUnreadDivider(channelId);
+      if (st.unreadStartId) repaintMessages(channelId);
+    }
+  }
+
+  if (opts.jumpTo) await jumpToMessage(channelId, opts.jumpTo);
+  maybeMarkRead();
+}
+
+// A view about to load: if nothing has answered within a beat (a stored copy
+// answers well within it), empty the message list and show the loader rather
+// than leave the previous view up. `still()` says the view is still wanted.
+// Returns the timer, to clear once the load is done.
+function blankSoon(still) {
+  return setTimeout(() => {
+    if (!still()) return;
+    const list = byId('message-list');
+    if (list) list.textContent = '';
+    const loader = byId('message-loader');
+    if (loader) loader.hidden = false;
+  }, 150);
+}
+
+// Redraw the open channel in place: still at the bottom if it was there,
+// else where the reader was.
+function repaintMessages(channelId) {
+  const sc = byId('message-scroll');
+  const top = sc ? sc.scrollTop : 0;
+  renderMessagesFull(channelId);
+  if (state.atBottom) scrollToBottom();
+  else if (sc) sc.scrollTop = top;
+  updateJumpLatest();
 }
 
 async function jumpToMessage(channelId, msgId) {
@@ -1773,18 +1912,20 @@ async function openLatest(opts = {}) {
 
 async function loadLatest() {
   const seq = ++latest.seq;
-  const list = byId('message-list');
-  if (list && !latest.loaded) list.textContent = ''; // never show the last channel under this title
+  // Never the last channel under this title for long (blankSoon).
+  const blank = latest.loaded ? 0 : blankSoon(() => seq === latest.seq && state.latest);
   const loader = byId('message-loader');
-  if (loader) loader.hidden = false;
   try {
-    const data = await api(latestURL(0), { toast: false });
+    const data = await api(latestURL(0), {
+      toast: false,
+      onFresh: (fresh) => {
+        if (!fresh || seq !== latest.seq || !state.latest) return;
+        setLatestPage(fresh);
+        paintLatest();
+      },
+    });
     if (seq !== latest.seq || !state.latest) return;
-    latest.msgs = data.messages;
-    latest.byId = new Map(data.messages.map((m) => [m.id, m]));
-    latest.hasMore = !!data.has_more;
-    latest.loaded = true;
-    latest.retryAt = 0;
+    setLatestPage(data);
   } catch {
     // Offline or failing: an empty feed; the connection banner says why.
     if (seq !== latest.seq || !state.latest) return;
@@ -1793,8 +1934,21 @@ async function loadLatest() {
     latest.hasMore = false;
     latest.loaded = false;
   } finally {
+    clearTimeout(blank);
     if (loader) loader.hidden = true;
   }
+  paintLatest();
+}
+
+function setLatestPage(data) {
+  latest.msgs = data.messages;
+  latest.byId = new Map(data.messages.map((m) => [m.id, m]));
+  latest.hasMore = !!data.has_more;
+  latest.loaded = true;
+  latest.retryAt = 0;
+}
+
+function paintLatest() {
   renderLatestFull();
   state.atBottom = true;
   scrollToBottom();
@@ -2952,9 +3106,15 @@ async function storeNoteOffline(id, body, rev) {
   } catch { /* storage full or unavailable: online still works */ }
 }
 
-async function forgetNoteOffline(id) {
+// Drop every stored copy of a channel or note (left, deleted, no longer
+// allowed): it must not stay readable on this device.
+async function forgetOffline(id) {
   const cache = await noteStore();
-  if (cache) cache.delete(noteStoreURL(id)).catch(() => {});
+  if (!cache) return;
+  cache.delete(noteStoreURL(id)).catch(() => {});
+  cache.delete(`/api/channels/${id}/messages`, { ignoreSearch: true }).catch(() => {});
+  // The Latest feed mixes channels: its stored copies may quote this one.
+  cache.delete('/api/latest', { ignoreSearch: true }).catch(() => {});
 }
 
 // Store the open session's text once it is confirmed (see above).
@@ -2993,7 +3153,7 @@ async function prefetchNotes() {
       if (s && s.loaded) continue; // an open note keeps its own copy
       if (await storedNoteRev(cache, ch.id) >= (ch.note_rev || 0)) continue;
       try {
-        const data = await api(noteStoreURL(ch.id), { toast: false });
+        const data = await api(noteStoreURL(ch.id), { toast: false, fresh: true });
         if (data && data.note) await storeNoteOffline(ch.id, data.note.body, data.note.rev);
       } catch { /* next pass */ }
     }
@@ -3068,6 +3228,8 @@ function flushMarkRead() {
 function maybeMarkRead() {
   const ch = state.channels.get(state.currentId);
   if (!ch || !ch.is_member) return;
+  const st = chanState(ch.id);
+  if (st.cached) return; // a stored page may be behind: wait for the live one
   if (document.hidden || !document.hasFocus()) return;
   if (!newestVisible()) return;
   // A different channel is waiting to be marked: commit it before this one
@@ -7630,14 +7792,31 @@ async function registerSW() {
   if (!('serviceWorker' in navigator)) return;
   // A new build id changes the script URL, which makes the browser install a
   // fresh worker whose cache name (slock-<v>) obsoletes the old shell.
+  const register = async (v) => {
+    try {
+      swRegistration = await navigator.serviceWorker.register('/sw.js?v=' + encodeURIComponent(v));
+    } catch (err) {
+      console.warn('service worker registration failed', err);
+    }
+  };
   const v = await Promise.race([
     versionReady,
     new Promise((resolve) => setTimeout(() => resolve(''), 3000)),
   ]);
-  try {
-    swRegistration = await navigator.serviceWorker.register('/sw.js?v=' + encodeURIComponent(v || 'dev'));
-  } catch (err) {
-    console.warn('service worker registration failed', err);
+  if (v) {
+    await register(v);
+  } else {
+    // No build id yet (a slow network). Registering under a stand-in would
+    // install a worker of that name over the real one — a new shell cache to
+    // fill over this very network. Keep the worker we have, and register for
+    // real once the id turns up.
+    try { swRegistration = (await navigator.serviceWorker.getRegistration()) || null; } catch { /* none */ }
+    versionReady.then(register);
+    if (!swRegistration) {
+      // None yet: push subscriptions need one now. Re-registered under the
+      // real id when it comes.
+      await register('dev');
+    }
   }
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data && e.data.type === 'navigate' && e.data.url) {
@@ -8523,7 +8702,18 @@ async function boot() {
 
   let meData;
   try {
-    meData = await api('/api/auth/me', { toast: false });
+    meData = await api('/api/auth/me', {
+      toast: false,
+      // The stored identity answers first (sw.js). A different person behind
+      // the live one means everything shown belongs to someone else.
+      onFresh: (fresh) => {
+        if (!fresh || !fresh.user || !state.me) return;
+        if (fresh.user.id !== state.me.id) { location.reload(); return; }
+        state.mustChangePw = !!fresh.must_change_pw;
+        state.pushKey = fresh.push_public_key || state.pushKey;
+        applyUserUpdate(fresh.user);
+      },
+    });
   } catch {
     return; // 401 already redirected; network error leaves the shell
   }
@@ -8552,7 +8742,7 @@ async function boot() {
 
   // Workspace identity, in parallel and non-blocking: the built-in mark and
   // the "slock" default stand until (unless) this answers.
-  api('/api/workspace', { toast: false })
+  api('/api/workspace', { toast: false, onFresh: (fresh) => fresh && applyWorkspace(fresh.workspace) })
     .then((data) => applyWorkspace(data.workspace))
     .catch(() => {});
 
@@ -8563,9 +8753,11 @@ async function boot() {
     .catch(() => {});
 
   try {
+    // Stored copies first (sw.js); the live ones repaint when they differ.
+    const startedAt = Date.now();
     const [chanData, userData] = await Promise.all([
-      api('/api/channels'),
-      api('/api/users'),
+      api('/api/channels', { onFresh: (fresh) => fresh && applyChannelList(fresh, startedAt) }),
+      api('/api/users', { onFresh: (fresh) => fresh && applyUserList(fresh.users) }),
     ]);
     for (const u of userData.users) state.users.set(u.id, u);
     state.users.set(state.me.id, state.me);

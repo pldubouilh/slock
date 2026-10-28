@@ -415,15 +415,11 @@ token from `?token=`.
   `/icons/*`. Handles `push` (show notification, set
   `navigator.setAppBadge(badge)`) and `notificationclick` (focus an existing
   client and `postMessage({type:'navigate', url})`, else open the url).
-- Offline reads: a second, unversioned cache (`slock-api`) keeps the GETs a
-  channel needs to render — `/api/auth/me`, `/api/channels`, `/api/users`,
-  `/api/workspace`, `/api/version`, and each channel's newest `messages` page
-  (no `before`/`after`), trimmed to the last 100 and filled lazily as channels
-  are opened. Strictly network-first: the copy is served only when the fetch
-  itself fails, and a miss returns a network error exactly as before, so online
-  behaviour is unchanged. Writes, `/api/events` and `/api/files/*` are never
-  cached. Cache-served responses carry `X-Slock-Offline: 1`, which flips
-  `#connection-banner` to "Offline".
+- Offline reads: a second, unversioned cache (`slock-api`) keeps the GETs a channel needs to render: `/api/auth/me`, `/api/channels`, `/api/users`, `/api/workspace`, `/api/version`, each channel's newest `messages` page (no `before`/`after`/`around`, trimmed to the last 100), each note (`/api/notes/{id}`) and the Latest feed's first page (`/api/latest`, no `before`). Lookups ignore the query string, except for the Latest feed, whose query names the feed. Writes, `/api/events` and `/api/files/*` are never cached.
+- Stored first: the worker answers those reads from the store at once (`X-Slock-Revalidating: 1`) and fetches the live copy behind it. The live copy is stored, then posted to the page that asked under the id it sent as `X-Slock-Req`: `{type:'api-fresh', id, status, body}`, with `body` null when it was the same or unreachable. A 403/404 drops the stored copy. With nothing stored, it goes to the network. A request made with `cache: 'no-cache'` is network-first, the copy answering only when the fetch fails (`X-Slock-Offline: 1`, which flips `#connection-banner` to "Offline").
+- In the page, `api(path, {onFresh})` sends the id and calls `onFresh(data)` once the live copy arrives (or `onFresh(null)`, also after 20s without a reply); `fromStore.has(data)` tells a stored answer. `{fresh: true}` asks for network-first, which is what syncing after a reconnect (`refetchChannels`) and the note prefetch use. Startup repaints the sidebar, users, workspace and identity from their live copies. A channel page from the store is `st.cached`: it isn't marked read, paged back or given its unread divider until `freshHistory` swaps in the live page. The Latest feed repaints too. A view whose load hasn't answered within 150ms (nothing stored) empties to the loader rather than keep the previous channel on screen.
+- Every channel you are in keeps its newest page stored: each time the worker stores a fresh `/api/channels`, it fetches again, one at a time and most recent first, every page that ends before its channel's `last_message_at`, and drops pages of channels no longer listed. Leaving or losing a channel deletes its stored page and note, and every stored Latest feed (`forgetOffline`).
+- Shell updates: a new worker deletes the older shell caches only once its own has `/`, `/style.css` and `/app.js`. An install over a bad connection can miss files; until it is complete, lookups (which search the caches oldest first) keep serving the older, complete shell, and each background refresh retries. If the page doesn't know the build id within 3s of boot, it keeps the worker it has rather than register `sw.js?v=dev` over it, and registers for real once the id arrives.
 - Server-backed dialogs (profile, admin, password, new channel, new DM,
   members, channel details, pins, attachments) refuse to open while offline —
   each `open*Modal` starts with a guard that toasts instead, so no dialog can

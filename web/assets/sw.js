@@ -41,14 +41,28 @@ self.addEventListener('install', (event) => {
   })());
 });
 
+// The files without which there is no app to start.
+const CORE = ['/', '/style.css', '/app.js'];
+
+// Sweep superseded shells once this build's is complete, sparing the API
+// cache — it is not versioned and its whole point is surviving the deploy
+// that replaced the shell. An install on a bad connection can miss files;
+// deleting the last good copy then left the next start fetching the app over
+// that connection, on a blank page. Until then lookups (caches.match, across
+// every cache) fall back to the older copy, and each background refresh
+// below tries again.
+async function sweepOldShells() {
+  const cache = await caches.open(CACHE);
+  for (const u of CORE) if (!(await cache.match(u))) return;
+  const names = await caches.keys();
+  await Promise.all(names
+    .filter((n) => n !== CACHE && n !== API_CACHE)
+    .map((n) => caches.delete(n)));
+}
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
-    const names = await caches.keys();
-    // Sweep superseded shells, but spare the API cache — it is not versioned
-    // and its whole point is surviving the deploy that replaced the shell.
-    await Promise.all(names
-      .filter((n) => n !== CACHE && n !== API_CACHE)
-      .map((n) => caches.delete(n)));
+    await sweepOldShells();
     await self.clients.claim();
   })());
 });
@@ -79,6 +93,8 @@ function offlineReadable(url) {
     case '/api/version':
       return true;
   }
+  // The Latest feed's first page (older pages stay online-only, as below).
+  if (url.pathname === '/api/latest') return !url.searchParams.has('before');
   // A channel's newest page, which is what openChannel asks for. Paging
   // through older/newer history, and windows around a jumped-to message,
   // stay online-only: they are meaningless without the live list they hang
@@ -128,17 +144,124 @@ async function putMe(cache, req, res) {
   await cache.put(req, res.clone());
 }
 
+// Lookups ignore the query string, so a changed page size (?limit=) still
+// finds the copy saved under the old one — except the Latest feed's, whose
+// query says which feed it is (DMs or not, pinned channels only).
+function matchStored(cache, req, url) {
+  return cache.match(req, { ignoreSearch: url.pathname !== '/api/latest' });
+}
+
 async function putApi(req, url, res) {
   const cache = await caches.open(API_CACHE);
   if (url.pathname === '/api/auth/me') return putMe(cache, req, res);
   if (url.pathname.endsWith('/messages')) return putMessages(cache, req, res);
-  return cache.put(req, res.clone());
+  await cache.put(req, res.clone());
+  if (url.pathname === '/api/channels') {
+    try { await storePages(await res.clone().json()); } catch { /* not a list */ }
+  }
 }
 
-// A cached body, flagged so the page can say it is showing saved messages.
-async function fromCache(res) {
+// Every channel you are in keeps its newest page stored, so it opens at once
+// even the first time in a session. After each fresh channel list: a page
+// that ends before its channel's last_message_at (or is missing) is fetched
+// again, most recent first, one at a time; pages of channels no longer listed
+// are dropped. Public channels you are not in are stored only as you open
+// them.
+const PAGE = 75; // = HISTORY_PAGE in app.js: the same URL replaces the same entry
+const PAGE_RE = /^\/api\/channels\/(\d+)\/messages$/;
+let storing = null;
+
+async function storePages(list) {
+  if (storing) return storing; // one pass at a time: the next list catches up
+  storing = (async () => {
+    const cache = await caches.open(API_CACHE);
+    const chans = [...(list.channels || []), ...(list.dms || [])];
+    const listed = new Set(chans.map((c) => c.id));
+    for (const req of await cache.keys()) {
+      const m = PAGE_RE.exec(new URL(req.url).pathname);
+      if (m && !listed.has(Number(m[1]))) await cache.delete(req);
+    }
+    const mine = chans
+      .filter((c) => c.kind !== 'channel' || c.is_member)
+      .sort((a, b) => (b.last_message_at || '').localeCompare(a.last_message_at || ''));
+    for (const ch of mine) {
+      const url = `/api/channels/${ch.id}/messages?limit=${PAGE}`;
+      const stored = await cache.match(url, { ignoreSearch: true });
+      if (stored && !pageBehind(await stored.json(), ch)) continue;
+      let res;
+      try { res = await fetch(url); } catch { return; } // offline: next list
+      if (res.ok) await putMessages(cache, new Request(url), res);
+    }
+  })();
+  try { await storing; } catch { /* best effort */ } finally { storing = null; }
+}
+
+function pageBehind(page, ch) {
+  const msgs = page && Array.isArray(page.messages) ? page.messages : null;
+  if (!msgs) return true;
+  if (!ch.last_message_at) return false;
+  const last = msgs[msgs.length - 1];
+  return !last || new Date(ch.last_message_at) > new Date(last.created_at);
+}
+
+// API reads: the stored copy at once, and the live one fetched behind it,
+// stored, and posted to the page that asked — under the id it sent as
+// X-Slock-Req: {type: 'api-fresh', id, status, body}, body null when the live
+// one is the same or unreachable. Nothing stored: plain network. A request
+// made with cache: 'no-cache' (the page syncing after a reconnect, or
+// prefetching) is network-first instead, the copy answering only if the
+// network fails.
+async function answerApi(event, req, url) {
+  const cache = await caches.open(API_CACHE);
+  const cached = await matchStored(cache, req, url);
+  if (cached && req.cache !== 'no-cache' && req.cache !== 'reload') {
+    const text = await cached.clone().text();
+    event.waitUntil(revalidate(event.clientId, req, url, text));
+    return fromCache(cached, 'X-Slock-Revalidating');
+  }
+  try {
+    const res = await fetch(req);
+    // Hand the page its response immediately and store a clone in the
+    // background: a channel open must not wait on a cache write.
+    if (res.ok) event.waitUntil(putApi(req, url, res.clone()));
+    else if (lostAccess(res)) event.waitUntil(forget(cache, req, url));
+    return res;
+  } catch {
+    // No copy: fail exactly as an offline fetch does, so api() raises its
+    // usual network error rather than a confusing empty 200.
+    return cached ? fromCache(cached, 'X-Slock-Offline') : Response.error();
+  }
+}
+
+async function revalidate(clientId, req, url, storedText) {
+  const msg = { type: 'api-fresh', id: req.headers.get('X-Slock-Req'), status: 0, body: null };
+  try {
+    const res = await fetch(req);
+    msg.status = res.status;
+    if (res.ok) {
+      const text = await res.clone().text();
+      await putApi(req, url, res);
+      if (text !== storedText) msg.body = text;
+    } else if (lostAccess(res)) {
+      await forget(await caches.open(API_CACHE), req, url);
+    }
+  } catch { /* unreachable: the copy stands */ }
+  if (!msg.id || !clientId) return;
+  const client = await self.clients.get(clientId);
+  if (client) client.postMessage(msg);
+}
+
+// Left, removed, deleted: the stored copy must not stay readable.
+const lostAccess = (res) => res.status === 403 || res.status === 404;
+const forget = (cache, req, url) =>
+  cache.delete(req, { ignoreSearch: url.pathname !== '/api/latest' }).catch(() => {});
+
+// A stored body, flagged for the page: X-Slock-Revalidating when the live one
+// is being fetched behind it (see answerApi), X-Slock-Offline when the network
+// failed — the page then says it is showing saved messages.
+async function fromCache(res, flag) {
   const headers = new Headers(res.headers);
-  headers.set('X-Slock-Offline', '1');
+  headers.set(flag, '1');
   return new Response(await res.blob(), {
     status: res.status, statusText: res.statusText, headers,
   });
@@ -150,47 +273,11 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
 
-  // API: network-first for the handful of reads a channel needs, so being
-  // online behaves exactly as it did before — the cache is consulted only
-  // when the fetch itself fails. Exception: a request marked
-  // X-Slock-Prefer-Cache (the page sends it while it has no live SSE stream
-  // — boot, reconnect, bad connection) is answered from the saved copy
-  // immediately, with a background fetch refreshing the store; the page
-  // reconciles once its stream connects. /api/events (an endless stream),
-  // /api/files and every write fall through to the browser untouched.
+  // API: the handful of reads a channel needs (see answerApi). /api/events
+  // (an endless stream), /api/files and every write fall through untouched.
   if (url.pathname.startsWith('/api/')) {
     if (!offlineReadable(url)) return;
-    event.respondWith((async () => {
-      if (req.headers.get('X-Slock-Prefer-Cache') === '1') {
-        const cache = await caches.open(API_CACHE);
-        const cached = await cache.match(req, { ignoreSearch: true });
-        if (cached) {
-          event.waitUntil((async () => {
-            try {
-              const res = await fetch(req);
-              if (res.ok) await putApi(req, url, res);
-            } catch { /* offline: the copy we just served stands */ }
-          })());
-          return fromCache(cached);
-        }
-        // Nothing saved: fall through to the normal network-first path.
-      }
-      try {
-        const res = await fetch(req);
-        // Hand the page its response immediately and store a clone in the
-        // background: a channel open must not wait on a cache write.
-        if (res.ok) event.waitUntil(putApi(req, url, res.clone()));
-        return res;
-      } catch {
-        // Scoped to the API store, and ignoreSearch so a changed page size
-        // (?limit=) still finds the copy that was saved under the old one.
-        const cache = await caches.open(API_CACHE);
-        const cached = await cache.match(req, { ignoreSearch: true });
-        // No copy: fail exactly as an offline fetch does today, so api()
-        // raises its usual network error rather than a confusing empty 200.
-        return cached ? fromCache(cached) : Response.error();
-      }
-    })());
+    event.respondWith(answerApi(event, req, url));
     return;
   }
 
@@ -208,7 +295,10 @@ self.addEventListener('fetch', (event) => {
           event.waitUntil((async () => {
             try {
               const res = await fetch(req);
-              if (res.ok) await (await caches.open(CACHE)).put('/', res);
+              if (res.ok) {
+                await (await caches.open(CACHE)).put('/', res);
+                await sweepOldShells();
+              }
             } catch { /* offline */ }
           })());
           return cached;
@@ -247,7 +337,10 @@ self.addEventListener('fetch', (event) => {
       event.waitUntil((async () => {
         try {
           const res = await fetch(req);
-          if (res.ok) await (await caches.open(CACHE)).put(req, res);
+          if (res.ok) {
+            await (await caches.open(CACHE)).put(req, res);
+            await sweepOldShells();
+          }
         } catch { /* offline */ }
       })());
       return cached;
