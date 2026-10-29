@@ -8378,6 +8378,11 @@ function wireKeyboard() {
       openNewDMModal();
       return;
     }
+    // Ctrl/⌘+S: everything saves itself, so no "Save page as…" dialog.
+    if (mod && !e.shiftKey && !e.altKey && (e.key === 's' || e.key === 'S')) {
+      e.preventDefault();
+      return;
+    }
     if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
       const box = byId('lightbox');
       if (box && !box.hidden) {
