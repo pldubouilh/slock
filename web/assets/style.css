@@ -447,6 +447,46 @@ body.side-right #side-resize {
 
 body.modal-open { overflow: hidden; }
 
+/* files dragged over the chat column: a veil over it with a dashed frame and
+   a card saying where they go (see wireFileDrop); clicks and drag events pass
+   through to the column underneath */
+#drop-overlay {
+  position: fixed;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  box-sizing: border-box;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-0) 72%, transparent);
+  animation: drop-in var(--t-fast) var(--ease);
+}
+#drop-overlay[hidden] { display: none; }
+#drop-overlay::before {
+  content: "";
+  position: absolute;
+  inset: 14px;
+  border: 2px dashed color-mix(in oklch, var(--accent) 55%, var(--border-strong));
+  border-radius: var(--r-l);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.drop-card {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 22px 34px;
+  border-radius: var(--r-l);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-2);
+  text-align: center;
+}
+.drop-card .ic { color: var(--accent); margin-bottom: 6px; }
+.drop-title { margin: 0; font-size: var(--fs-m); font-weight: 600; color: var(--text-1); }
+.drop-where { margin: 0; font-size: var(--fs-s); color: var(--text-2); overflow-wrap: anywhere; }
+@keyframes drop-in { from { opacity: 0; } }
+
 /* offline: the composer visibly loses confidence, the banner does the talking */
 #app.is-offline .composer-box { border-style: dashed; opacity: 0.8; }
 

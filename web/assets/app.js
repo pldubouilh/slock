@@ -4152,6 +4152,50 @@ function clearTray(items) {
   renderTrayVisibility();
 }
 
+// Files dragged over the window. The chat column (#main) takes them while a
+// channel or DM with a composer is open, under #drop-overlay; anywhere else —
+// the sidebar, a note, Latest, a modal — the drop is refused, so the browser
+// does not open the file in place of the app. dragover repeats while the
+// pointer moves or rests, so the overlay goes once it stops coming.
+function wireFileDrop() {
+  const overlay = byId('drop-overlay');
+  let hideTimer = 0;
+  const hasFiles = (e) => !!e.dataTransfer && [...e.dataTransfer.types].includes('Files');
+  const takesFiles = (e) => {
+    const main = byId('main');
+    const form = byId('composer');
+    return !!(main && main.contains(e.target) && state.currentId && !noteViewId && !state.latest
+      && form && form.offsetParent !== null && !topModal());
+  };
+  const show = (on) => {
+    if (!overlay) return;
+    if (on && overlay.hidden) {
+      const r = byId('main').getBoundingClientRect();
+      Object.assign(overlay.style, { top: `${r.top}px`, left: `${r.left}px`, width: `${r.width}px`, height: `${r.height}px` });
+      const ch = state.channels.get(state.currentId);
+      const where = overlay.querySelector('.drop-where');
+      if (where) where.textContent = ch ? `to ${ch.kind === 'dm' ? channelDisplayName(ch) : chanLabel(ch)}` : '';
+    }
+    overlay.hidden = !on;
+  };
+  document.addEventListener('dragover', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    const ok = takesFiles(e);
+    e.dataTransfer.dropEffect = ok ? 'copy' : 'none';
+    show(ok);
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => show(false), 250);
+  }, true);
+  document.addEventListener('drop', (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    clearTimeout(hideTimer);
+    show(false);
+    if (takesFiles(e) && e.dataTransfer.files.length) addFiles([...e.dataTransfer.files]);
+  }, true);
+}
+
 function wireUploads() {
   on(byId('attach-btn'), 'click', () => {
     const fi = byId('file-input');
@@ -4162,18 +4206,7 @@ function wireUploads() {
     e.target.value = '';
   });
 
-  const dropZone = byId('main') || byId('message-scroll');
-  if (dropZone) {
-    dropZone.addEventListener('dragover', (e) => {
-      if (e.dataTransfer && [...e.dataTransfer.types].includes('Files')) e.preventDefault();
-    });
-    dropZone.addEventListener('drop', (e) => {
-      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
-        e.preventDefault();
-        addFiles([...e.dataTransfer.files]);
-      }
-    });
-  }
+  wireFileDrop();
 
   on(byId('composer-input'), 'paste', (e) => {
     const files = e.clipboardData && [...e.clipboardData.files];

@@ -255,6 +255,16 @@
 
 </div><!-- /#app -->
 
+<!-- shown over the chat column while files are dragged over it; JS sizes it
+     to #main and names the conversation -->
+<div id="drop-overlay" aria-hidden="true" hidden>
+  <div class="drop-card">
+    <svg class="ic" viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5"/><path d="M4 14v3.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V14"/></svg>
+    <p class="drop-title">Drop to attach</p>
+    <p class="drop-where"></p>
+  </div>
+</div>
+
 <div class="nav-backdrop" aria-hidden="true"></div>
 
 <!-- ================= palette (Ctrl/⌘+K) ================= -->

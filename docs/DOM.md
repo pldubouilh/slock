@@ -192,6 +192,11 @@ strings, so the templates are where message/row structure lives.
                             A recent search row (kind `recent-search`) re-runs
                             it in place; each Recent row has a `.pal-forget` ×
   #palette-empty            empty state, JS toggles [hidden]
+#drop-overlay               veil over #main while files are dragged over it
+                            (fixed, sized to #main by JS, no pointer events):
+                            .drop-card with .drop-title and .drop-where (the
+                            conversation). Only while a channel or DM with its
+                            composer is open; elsewhere a drop is refused
 #lightbox                   image viewer, JS toggles [hidden]; ←/→, the
                             #lightbox-prev/#lightbox-next arrows and swiping
                             step through the surrounding gallery; clicking the
