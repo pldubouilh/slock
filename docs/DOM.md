@@ -109,6 +109,8 @@ strings, so the templates are where message/row structure lives.
                       #pins-btn (pinned-messages modal),
                       #pin-channel-btn (pins this channel/DM to the sidebar so
                       it survives collapse — .is-on when pinned; works for DMs),
+                      #note-mono-btn (notes only: monospace or chat font on
+                      this device — .is-on while monospace),
                       #files-btn (channel attachments modal), #info-btn
                       (details: name, topic, privacy, members, leave, delete),
                       #close-dm-btn (DMs only: hides the conversation from
@@ -128,20 +130,36 @@ strings, so the templates are where message/row structure lives.
                             .composer-area); for a note the header's
                             #channel-topic reads "Private note · Saved"
                             ("Saving…", "Offline — …") and #mute-btn,
-                            #pins-btn, #files-btn hide. Its --note-w (the
-                            text column's width) is set by JS from
-                            localStorage["slock:note-width"]; .note-resizing
-                            while a grip is dragged
+                            #pins-btn, #files-btn hide, #note-mono-btn shows.
+                            Its --note-w (the text column's width) is set by
+                            JS from localStorage["slock:note-width"];
+                            .note-resizing while a grip is dragged;
+                            .note-mono sets the text in the monospace font,
+                            the default (localStorage["slock:note-mono"] = "0"
+                            for the chat font)
       #note-sheet           the faint surface behind the text column
                             (--note-w plus --note-pad each side); hidden on
                             phones
       .note-grip            --start / --end: drag handles on the sheet's edges
                             (pointer drag sets the width, double-click resets);
                             hidden on phones
+      #note-paint           over the editor, clipped to it, clicks pass
+                            through: #note-paint-text holds the same text, one
+                            <div> per line (.md-h1…6, .md-quote, .md-li,
+                            .md-done, .md-hr, .md-fence, .md-pre; table rows
+                            .md-th, .md-tsep, .md-tr, .md-alt; .md-top and
+                            .md-end on a block's first and last line), its
+                            markdown styled inline (.md-mk for the markers,
+                            which stay, .md-pipe for a table's; .md-b, .md-i,
+                            .md-s, .md-code, .md-link, .md-url).
+                            Laid out like the editor and moved with its
+                            scroll; only changed lines are redrawn
       #note-editor          <textarea>, the note's whole text: plain, the chat
-                            font, centred column. JS rewrites its value when
-                            someone else's edit lands, keeping caret, selection
-                            and scroll; [readonly] while the text loads
+                            font, centred column, glyphs transparent
+                            (#note-paint shows the text). JS rewrites its
+                            value when someone else's edit lands, keeping
+                            caret, selection and scroll; [readonly] while the
+                            text loads
       #note-carets          layer over the editor: one .note-caret per other
                             person in the note (a bar in their avatar colour,
                             --caret, with .note-caret-tag naming them; the tag

@@ -778,6 +778,8 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
 #mute-btn[aria-pressed="true"] { opacity: 0.55; }
 /* pinned-to-sidebar channel: the header pin lights up in the accent */
 #pin-channel-btn.is-on { color: var(--accent); }
+/* a note in the monospace font (the default): the </> lights up */
+#note-mono-btn.is-on { color: var(--accent); }
 
 /* phones: the icon row eats the channel title, so it collapses into one "⋯"
    button (see the max-width media query) whose menu lists the live actions.
@@ -905,7 +907,8 @@ body.view-note .composer-area { display: none; }
   border: 0;
   outline: none;
   resize: none;
-  color: var(--text-1);
+  color: transparent; /* the styled copy behind shows instead (below) */
+  caret-color: var(--text-1);
   font: inherit;
   font-size: var(--fs-body);
   line-height: 1.75;
@@ -915,6 +918,113 @@ body.view-note .composer-area { display: none; }
   overscroll-behavior: contain;
 }
 #note-editor::placeholder { color: var(--text-3); }
+/* monospace (the default, see applyNoteMono): a touch smaller, as mono faces
+   run large; the styled copy and the caret mirror copy it from the editor */
+#note-view.note-mono #note-editor { font-family: var(--font-mono); font-size: calc(var(--fs-body) * 0.93); }
+
+/* Markdown in a note: the editor's glyphs are transparent and a styled copy
+   of its text (#note-paint, laid out by JS like the editor) is drawn over it,
+   letting clicks through. The editor's selection and caret show under the
+   copy's text, as they would under their own. Nothing below may
+   change a glyph's width — no bold or italic face, no other font, no padding
+   — or the copy would wrap apart from the editor: weight is a thin stroke and
+   emphasis a colour; markers stay, dimmed. */
+#note-editor::selection { color: transparent; background: color-mix(in srgb, var(--accent) 30%, transparent); }
+#note-paint {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+#note-paint-text {
+  /* the note's own palette, drawn from the theme's: its accent toned down
+     toward the text greys for markers and emphasis, and for links the accent
+     turned toward sea blue round the colour wheel; a custom theme carries
+     over */
+  --md-mark: color-mix(in oklch, var(--accent) 30%, var(--text-3));
+  --md-tint: color-mix(in oklch, var(--accent) 55%, var(--text-2));
+  --md-link: color-mix(in oklch, var(--accent) 70%, var(--text-1));
+  box-sizing: border-box;
+  color: var(--text-1);
+}
+@supports (color: oklch(from red l c h)) {
+  #note-paint-text { --md-link: oklch(from var(--accent) l calc(c * 0.8) calc(h - 45)); }
+}
+#note-paint-text > div { position: relative; }
+#note-view:has(#note-editor:read-only) #note-paint { opacity: 0.5; }
+/* markers: present but quiet */
+#note-paint .md-mk { color: var(--md-mark); }
+/* Weight is a stroke painted under the glyph, so its edges stay crisp. */
+#note-paint .md-b,
+#note-paint :is(.md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6),
+#note-paint .md-th { paint-order: stroke fill; }
+/* headings: the text colour, heavier by level; the #s tinted; grey rules
+   under the first two levels (a shadow, which takes no room) */
+#note-paint :is(.md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6) { color: var(--text-1); }
+#note-paint :is(.md-h1, .md-h2, .md-h3, .md-h4, .md-h5, .md-h6) > .md-mk { color: var(--md-tint); }
+#note-paint .md-h1 { -webkit-text-stroke: 0.05em currentColor; box-shadow: inset 0 -2px 0 var(--border-strong); }
+#note-paint .md-h2 { -webkit-text-stroke: 0.042em currentColor; box-shadow: inset 0 -1px 0 var(--border); }
+#note-paint .md-h3 { -webkit-text-stroke: 0.035em currentColor; }
+#note-paint .md-h4, #note-paint .md-h5, #note-paint .md-h6 { -webkit-text-stroke: 0.028em currentColor; color: var(--text-2); }
+#note-paint .md-b { -webkit-text-stroke: 0.03em currentColor; color: var(--text-1); }
+#note-paint .md-i { color: color-mix(in oklch, var(--accent) 22%, var(--text-1)); }
+/* A monospace face keeps every glyph's width in its italic too, so there the
+   slant is real (in the chat font the tint alone has to do). */
+#note-view.note-mono .md-i { font-style: italic; }
+#note-paint .md-s { color: var(--text-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-3) 70%, transparent); }
+/* inline code: a chip; its spread shadow pads it without taking room */
+#note-paint .md-code {
+  border-radius: 4px;
+  background: var(--bg-2);
+  box-shadow: 0 0 0 2px var(--bg-2);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+/* links: the text of [text](url) in the link colour, its url quiet; a bare
+   url in the link colour */
+#note-paint .md-link { color: var(--md-link); }
+#note-paint .md-url { color: var(--md-link); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--md-link) 40%, transparent); text-underline-offset: 2px; }
+#note-paint .md-link .md-url { color: var(--text-3); text-decoration-color: color-mix(in srgb, var(--text-3) 40%, transparent); }
+#note-paint .md-lm { color: var(--md-tint); }
+#note-paint .md-done { color: var(--text-3); }
+#note-paint .md-done > .md-mk { color: var(--md-tint); }
+#note-paint .md-quote { color: var(--text-2); }
+#note-paint .md-quote::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -14px;
+  width: 3px;
+  background: color-mix(in oklch, var(--accent) 35%, var(--border-strong));
+}
+/* a rule through a --- line, the dashes faint over it */
+#note-paint .md-hr::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  border-top: 1px solid var(--border-strong);
+  z-index: -1;
+}
+#note-paint .md-hr { isolation: isolate; }
+/* code blocks and tables: a band under the lines, widened past the text by a
+   margin that the padding gives back; .md-top / .md-end round its ends */
+#note-paint .md-pre,
+#note-paint .md-fence,
+#note-paint .md-th,
+#note-paint .md-tsep,
+#note-paint .md-tr {
+  margin-inline: -12px;
+  padding-inline: 12px;
+  background: color-mix(in srgb, var(--bg-2) 70%, transparent);
+}
+#note-paint .md-top { border-top-left-radius: 6px; border-top-right-radius: 6px; }
+#note-paint .md-end { border-bottom-left-radius: 6px; border-bottom-right-radius: 6px; }
+#note-paint .md-th { -webkit-text-stroke: 0.03em currentColor; color: var(--text-1); }
+#note-paint .md-tr.md-alt { background: var(--bg-2); }
+#note-paint .md-pipe { color: color-mix(in srgb, var(--md-mark) 70%, transparent); }
 
 /* The sheet: a faint surface under the text column, edged with hairlines, so
    the column's limits read at a glance. It never scrolls; the text does. */
@@ -1007,7 +1117,6 @@ body.view-note .composer-area { display: none; }
   border: 0;
   pointer-events: none;
 }
-#note-editor:read-only { color: var(--text-3); }
 @media (max-width: 760px) {
   #note-editor { padding: 20px 16px; }
   #note-sheet, .note-grip { display: none; }

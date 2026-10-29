@@ -269,6 +269,7 @@ const LS = {
   foldDMs: 'slock:fold-dms',
   foldNotes: 'slock:fold-notes',     // '1' = the Notes row is folded
   noteW: 'slock:note-width',         // px width of a note's text column (desktop)
+  noteMono: 'slock:note-mono',       // '0' = notes in the chat font (monospace is the default)
   groupChans: 'slock:group-channels', // '1' = fold channels by name prefix
   showUnjoined: 'slock:show-unjoined', // '1' = list channels you are not in
   sound: 'slock:sound',
@@ -996,7 +997,7 @@ function updateJumpLatest() {
 /* ============================================================ body tokeniser */
 
 // Compact message formatting: escape-by-construction (DOM nodes, never HTML
-// strings), links, **bold**, *italic* / _italic_, ~strike~, `code`,
+// strings), links, *bold* / **bold**, _italic_ / __italic__, ~strike~, `code`,
 // ```fences```, > quotes, @mentions. Newlines preserved.
 
 const URL_RE = /^https?:\/\/[^\s<>"']+/;
@@ -1082,10 +1083,23 @@ function renderInline(text, out) {
       const end = text.indexOf('*', i + 1);
       if (end > i + 1 && !text.slice(i + 1, end).includes('\n')) {
         flush();
-        const em = document.createElement('em');
-        em.textContent = text.slice(i + 1, end);
-        out.append(em);
+        const strong = document.createElement('strong');
+        renderInline(text.slice(i + 1, end), strong);
+        out.append(strong);
         i = end + 1;
+        continue;
+      }
+    }
+
+    if (ch === '_' && text[i + 1] === '_' && boundaryBefore()) {
+      const end = text.indexOf('__', i + 2);
+      if (end > i + 2 && !text.slice(i + 2, end).includes('\n')
+        && (end + 2 >= text.length || /[\s.,;:!?)\]}'"]/.test(text[end + 2]))) {
+        flush();
+        const em = document.createElement('em');
+        renderInline(text.slice(i + 2, end), em);
+        out.append(em);
+        i = end + 2;
         continue;
       }
     }
@@ -2220,6 +2234,8 @@ function renderChannelHeader() {
     pinChanBtn.title = pinned ? 'Unpin from sidebar' : 'Pin to sidebar';
     pinChanBtn.setAttribute('aria-label', pinChanBtn.title);
   }
+  const monoBtn = byId('note-mono-btn');
+  if (monoBtn) monoBtn.hidden = !isNote;
   const filesBtn = byId('files-btn');
   if (filesBtn) filesBtn.hidden = !ch; // any readable channel has history
   const infoBtn = byId('info-btn');
@@ -2501,6 +2517,7 @@ async function showNote(ch, opts = {}) {
   } else {
     ta.value = '';
     ta.readOnly = true; // nothing to edit until the text is here
+    scheduleNotePaint();
     await loadNote(s);
     if (noteViewId !== ch.id) return;
   }
@@ -2581,6 +2598,7 @@ function paintNote(s, { reset = false, op = null } = {}) {
     ta.readOnly = false;
     ta.setSelectionRange(ta.value.length, ta.value.length);
     ta.scrollTop = ta.scrollHeight;
+    scheduleNotePaint();
     return;
   }
   const top = ta.scrollTop;
@@ -2590,6 +2608,7 @@ function paintNote(s, { reset = false, op = null } = {}) {
   ta.value = s.doc;
   ta.setSelectionRange(start, end, dir);
   ta.scrollTop = top;
+  scheduleNotePaint();
 }
 
 // Whatever was typed in the editor since we last looked becomes an edit.
@@ -2939,6 +2958,166 @@ function renderNoteCarets() {
     layer.append(el);
   }
   mirror.textContent = '';
+}
+
+/* -------- markdown in a note
+   The text stays exactly as typed — every # and * shows — but it is drawn
+   styled: #note-paint-text holds a copy of it, laid out like the editor
+   (syncNoteMirror) and moved with its scroll, and the editor's own glyphs are
+   transparent, so only its caret and selection show over the copy. The styles
+   must never change how wide a glyph is (no bold or italic face, no other
+   font, no padding), or the copy would wrap apart from the editor: weight is a
+   thin stroke, emphasis a colour. One div per line; a paint redraws only the
+   lines that changed, found by matching from both ends. */
+
+const MD_FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const MD_HEAD = /^ {0,3}(#{1,6})(?=\s|$)/;
+const MD_HR = /^ {0,3}([-*_])(?: *\1){2,} *$/;
+const MD_QUOTE = /^ {0,3}>+/;
+const MD_LIST = /^(\s*)([-*+]|\d{1,9}[.)])(?=\s|$)((\s+)\[([ xX])\](?=\s|$))?/;
+const MD_INLINE = new RegExp([
+  /(`+)(?!`)(.+?)(?<!`)\1(?!`)/.source,                        // 1 ticks, 2 code
+  /\*\*(?=\S)(.+?)(?<=\S)\*\*/.source,                         // 3 bold
+  /(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)/.source,                // 4 italic (_ and __ both)
+  /~~(?=\S)(.+?)(?<=\S)~~/.source,                             // 5 struck
+  /(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])/.source,  // 6 bold (* and ** both)
+  /(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)/.source,          // 7 italic
+  /\[([^\]]+)\]\(([^)\s]+)\)/.source,                          // 8 text, 9 url
+  /\bhttps?:\/\/[^\s<>]*[^\s<>.,:;!?"')\]]/.source,            // a bare link
+].join('|'), 'g');
+
+const MD_TSEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
+const notePaint = { keys: [], frame: 0 };
+
+// A line's class, given the code fence it sits in ('' outside one), and the
+// fence after it.
+function mdLineKind(line, fence) {
+  const f = MD_FENCE.exec(line);
+  if (fence) {
+    const closes = f && f[1][0] === fence[0] && f[1].length >= fence.length && !line.slice(f[0].length).trim();
+    return closes ? { cls: 'md-fence md-end', fence: '' } : { cls: 'md-pre', fence };
+  }
+  if (f && !(f[1][0] === '`' && line.slice(f[0].length).includes('`'))) return { cls: 'md-fence md-top', fence: f[1] };
+  const h = MD_HEAD.exec(line);
+  if (h) return { cls: `md-h${h[1].length}`, fence };
+  if (MD_HR.test(line)) return { cls: 'md-hr', fence };
+  if (MD_QUOTE.test(line)) return { cls: 'md-quote', fence };
+  const li = MD_LIST.exec(line);
+  if (li) return { cls: li[5] && li[5] !== ' ' ? 'md-li md-done' : 'md-li', fence };
+  return { cls: '', fence };
+}
+
+// Pipe tables: a run of plain lines that each hold a |, one of them (not the
+// first) a |---|---| line. The rows above it are the header; the body's rows
+// alternate; the ends of the run are marked to round the band behind it.
+function mdTables(lines, kinds) {
+  for (let i = 0; i < lines.length;) {
+    if (kinds[i] !== '' || !lines[i].includes('|')) { i++; continue; }
+    let j = i;
+    while (j < lines.length && kinds[j] === '' && lines[j].includes('|')) j++;
+    let sep = -1;
+    for (let k = i + 1; k < j && sep < 0; k++) if (MD_TSEP.test(lines[k])) sep = k;
+    for (let k = i; sep > 0 && k < j; k++) {
+      let cls = k < sep ? 'md-th' : k === sep ? 'md-tsep' : (k - sep) % 2 ? 'md-tr' : 'md-tr md-alt';
+      if (k === i) cls += ' md-top';
+      if (k === j - 1) cls += ' md-end';
+      kinds[k] = cls;
+    }
+    i = j;
+  }
+}
+
+const mdMark = (s) => `<span class="md-mk">${escapeHtml(s)}</span>`;
+
+function mdLineHTML(line, cls) {
+  if (!line) return '<br>';
+  if (cls === 'md-pre') return escapeHtml(line);
+  if (cls.startsWith('md-fence') || cls === 'md-hr' || cls.startsWith('md-tsep')) return mdMark(line);
+  if (cls.startsWith('md-th') || cls.startsWith('md-tr')) {
+    return line.split(/(?<!\\)(\|)/)
+      .map((part) => (part === '|' ? '<span class="md-mk md-pipe">|</span>' : mdInline(part))).join('');
+  }
+  let m;
+  if (cls.startsWith('md-h')) m = MD_HEAD.exec(line);
+  else if (cls === 'md-quote') m = MD_QUOTE.exec(line);
+  if (m) return mdMark(m[0]) + mdInline(line.slice(m[0].length));
+  if (cls.startsWith('md-li') && (m = MD_LIST.exec(line))) {
+    const box = m[3] ? escapeHtml(m[4]) + mdMark(m[3].slice(m[4].length)) : '';
+    return `${escapeHtml(m[1])}<span class="md-lm">${escapeHtml(m[2])}</span>${box}${mdInline(line.slice(m[0].length))}`;
+  }
+  return mdInline(line);
+}
+
+// Inline markdown as HTML that reads, tags aside, exactly as s.
+function mdInline(s) {
+  let out = '';
+  let last = 0;
+  for (const m of s.matchAll(MD_INLINE)) {
+    out += escapeHtml(s.slice(last, m.index)) + mdSpan(m);
+    last = m.index + m[0].length;
+  }
+  return out + escapeHtml(s.slice(last));
+}
+
+function mdSpan(m) {
+  const wrap = (cls, mark, inner) => `<span class="${cls}">${mdMark(mark)}${inner}${mdMark(mark)}</span>`;
+  if (m[1]) return wrap('md-code', m[1], escapeHtml(m[2]));
+  if (m[3]) return wrap('md-b', '**', mdInline(m[3]));
+  if (m[4]) return wrap('md-i', '__', mdInline(m[4]));
+  if (m[5]) return wrap('md-s', '~~', mdInline(m[5]));
+  if (m[6]) return wrap('md-b', '*', mdInline(m[6]));
+  if (m[7]) return wrap('md-i', '_', mdInline(m[7]));
+  if (m[8]) {
+    return `<span class="md-link">${mdMark('[')}${mdInline(m[8])}${mdMark('](')}`
+      + `<span class="md-url">${escapeHtml(m[9])}</span>${mdMark(')')}</span>`;
+  }
+  return `<span class="md-url">${escapeHtml(m[0])}</span>`;
+}
+
+function scheduleNotePaint() {
+  if (!notePaint.frame) notePaint.frame = requestAnimationFrame(paintNoteMarkdown);
+}
+
+function scrollNotePaint() {
+  const ta = noteEditor();
+  const out = byId('note-paint-text');
+  if (ta && out) out.style.transform = `translateY(${-ta.scrollTop}px)`;
+}
+
+function paintNoteMarkdown() {
+  notePaint.frame = 0;
+  const ta = noteEditor();
+  const out = byId('note-paint-text');
+  if (!ta || !out) return;
+  syncNoteMirror(ta, out);
+  const lines = ta.value.split('\n');
+  const kinds = [];
+  let fence = '';
+  for (const line of lines) {
+    const k = mdLineKind(line, fence);
+    kinds.push(k.cls);
+    fence = k.fence;
+  }
+  mdTables(lines, kinds);
+  const keys = lines.map((line, i) => `${kinds[i]}\n${line}`);
+  const old = notePaint.keys;
+  let a = 0;
+  while (a < old.length && a < keys.length && old[a] === keys[a]) a++;
+  let b = 0;
+  while (b < old.length - a && b < keys.length - a && old[old.length - 1 - b] === keys[keys.length - 1 - b]) b++;
+  const rows = out.children;
+  for (let i = old.length - b - 1; i >= a; i--) rows[i].remove();
+  const frag = document.createDocumentFragment();
+  for (let i = a; i < keys.length - b; i++) {
+    const row = document.createElement('div');
+    if (kinds[i]) row.className = kinds[i];
+    row.innerHTML = mdLineHTML(lines[i], kinds[i]);
+    frag.append(row);
+  }
+  out.insertBefore(frag, rows[a] || null);
+  notePaint.keys = keys;
+  scrollNotePaint();
 }
 
 // How a channel or note is named in a sentence: "#design", "“Groceries”".
@@ -7511,6 +7690,7 @@ function clampZoom(z) {
 function applyZoom(z) {
   z = clampZoom(z);
   document.documentElement.style.setProperty('--zoom', String(z));
+  scheduleNotePaint(); // the styled copy of a note copies the font size
   return z;
 }
 
@@ -7554,6 +7734,7 @@ const FONTS = [
 function applyFont(stack) {
   if (stack) document.documentElement.style.setProperty('--font-sans', stack);
   else document.documentElement.style.removeProperty('--font-sans');
+  scheduleNotePaint(); // the styled copy of a note copies the font
 }
 
 function setFont(stack) {
@@ -7645,6 +7826,31 @@ function wireSidebarResize() {
     localStorage.removeItem(LS.sidebarW);
     applySidebarWidth(0);
   });
+}
+
+/* -------- note font (device-local): monospace by default, so text laid out
+   in columns — tables above all — lines up; the header's </> button switches
+   this device to the chat font. */
+
+function applyNoteMono(mono) {
+  const view = byId('note-view');
+  if (view) view.classList.toggle('note-mono', mono);
+  const btn = byId('note-mono-btn');
+  if (btn) {
+    btn.classList.toggle('is-on', mono);
+    btn.setAttribute('aria-pressed', mono ? 'true' : 'false');
+    btn.title = mono ? 'Use the chat font' : 'Use a monospace font';
+    btn.setAttribute('aria-label', btn.title);
+  }
+  scheduleNotePaint(); // the text rewraps
+  scheduleCaretRender();
+}
+
+function toggleNoteMono() {
+  const mono = !byId('note-view').classList.contains('note-mono');
+  applyNoteMono(mono);
+  if (mono) localStorage.removeItem(LS.noteMono);
+  else localStorage.setItem(LS.noteMono, '0');
 }
 
 /* -------- note width (device-local, desktop only): drag either edge of the
@@ -8203,13 +8409,16 @@ function wireSidebar() {
   on(noteEditor(), 'input', () => {
     const s = noteSessions.get(noteViewId);
     if (s) captureNoteInput(s);
+    scheduleNotePaint();
   });
   // Our caret moved (typing, clicks, arrows, selecting): tell the others.
   for (const ev of ['input', 'select', 'selectionchange', 'keyup', 'mouseup', 'focus']) {
     on(noteEditor(), ev, () => { if (noteViewId) sendNoteCaret(); });
   }
-  on(noteEditor(), 'scroll', scheduleCaretRender, { passive: true });
+  on(noteEditor(), 'scroll', () => { scrollNotePaint(); scheduleCaretRender(); }, { passive: true });
   window.addEventListener('resize', scheduleCaretRender);
+  // The styled copy follows the editor's width (window, sheet width, scrollbar).
+  if ('ResizeObserver' in window) new ResizeObserver(scheduleNotePaint).observe(noteEditor());
   on(byId('new-channel-btn'), 'click', openNewChannelModal);
   on(byId('new-dm-btn'), 'click', openNewDMModal);
   on(byId('fold-channels'), 'click', () => setSectionFolded('channel', !foldChans));
@@ -8292,6 +8501,7 @@ function wireHeader() {
   on(byId('mute-btn'), 'click', toggleMute);
   on(byId('files-btn'), 'click', openFilesModal);
   on(byId('pins-btn'), 'click', openPinsModal);
+  on(byId('note-mono-btn'), 'click', toggleNoteMono);
   on(byId('pin-channel-btn'), 'click', () => { if (state.currentId) togglePinChannel(state.currentId); });
   on(byId('close-dm-btn'), 'click', closeDMConversation);
   on(byId('info-btn'), 'click', openChannelInfoModal);
@@ -8697,6 +8907,7 @@ async function boot() {
   applyDensity(localStorage.getItem(LS.density) === 'compact' ? 'compact' : 'cozy');
   applySidebarWidth(parseInt(localStorage.getItem(LS.sidebarW), 10) || 0);
   applyNoteWidth(parseInt(localStorage.getItem(LS.noteW), 10) || 0);
+  applyNoteMono(localStorage.getItem(LS.noteMono) !== '0');
   applyZoom(parseFloat(localStorage.getItem(LS.zoom)) || 1);
   loadClosedDMs();
   loadSidebarPrefs();
