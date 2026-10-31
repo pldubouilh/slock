@@ -256,6 +256,7 @@ Query grammar — filters may appear anywhere, remaining words are the text:
   also indexed by their parts, so `research` finds a message containing
   `www.research.example.co.uk`. Quoted phrases, `or` and `-negation` keep their
   websearch meaning.
+- A message also matches when one of its files' names contains every word of the text (case-insensitive substring, quotes dropped, as for notes). When only the file name matched, its `snippet` leads with `📎 ` and that name, matches marked, then ` — ` and the start of the text if there is any.
 
 Results are limited to channels the caller can read, newest first, default
 limit 30 (max 100). `snippet` is server-rendered with `ts_headline`; it is

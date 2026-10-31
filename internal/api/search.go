@@ -111,6 +111,24 @@ func safeSnippet(headline string) string {
 	return escaped
 }
 
+// fileSnippet leads a result's snippet with the first of its files named with
+// every word, matches marked, when the text itself had nothing to mark (the
+// message was found by its file's name).
+func fileSnippet(files []db.Attachment, words []string, snippet string) string {
+	if strings.Contains(snippet, "<mark>") {
+		return snippet
+	}
+	for _, f := range files {
+		if name, _, _, ok := noteSnippet(f.Filename, words); ok {
+			if strings.TrimSpace(snippet) == "" {
+				return "📎 " + name
+			}
+			return "📎 " + name + " — " + snippet
+		}
+	}
+	return snippet
+}
+
 // truncateBody shortens a plain body used as a snippet when there is no text
 // query to highlight.
 func truncateBody(body string) string {
@@ -174,7 +192,19 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 		if pre := prefixTSQuery(q.Text); pre != "" {
 			tsq = "(" + tsq + " || to_tsquery('simple', " + arg(pre) + "))"
 		}
-		where = append(where, "m.search_tsv @@ "+tsq)
+		// A message also matches when one of its files is named with every
+		// word (substring, as for notes). The union keeps the GIN index on the
+		// text arm; attachments is scanned for the names.
+		hit := "SELECT id FROM messages WHERE search_tsv @@ " + tsq
+		if words := noteSearchWords(q.Text); len(words) > 0 {
+			var conds []string
+			for _, w := range words {
+				conds = append(conds, "a.filename ILIKE "+arg("%"+likeEscape(w)+"%"))
+			}
+			hit += " UNION SELECT a.message_id FROM attachments a WHERE a.message_id IS NOT NULL AND " +
+				strings.Join(conds, " AND ")
+		}
+		where = append(where, "m.id IN ("+hit+")")
 		snippet = "ts_headline('english', m.body, " + tsq + ", " + arg(headlineOptions) + ")"
 	}
 	if q.From != "" {
@@ -229,8 +259,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 	if err := s.hydrate(r.Context(), msgs, me.ID); err != nil {
 		return err
 	}
+	words := noteSearchWords(q.Text)
 	for i := range results {
 		results[i].Message = msgs[i]
+		if q.Text != "" {
+			results[i].Snippet = fileSnippet(msgs[i].Attachments, words, results[i].Snippet)
+		}
 	}
 
 	// Notes have no author or messages, so from: and in: leave them out.

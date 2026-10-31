@@ -3,6 +3,8 @@ package api
 import (
 	"strings"
 	"testing"
+
+	"slock/internal/db"
 )
 
 func TestParseSearchQuery(t *testing.T) {
@@ -103,5 +105,22 @@ func TestNoteSnippet(t *testing.T) {
 	}
 	if likeEscape(`50%_\`) != `50\%\_\\` {
 		t.Error("likeEscape")
+	}
+}
+
+func TestFileSnippet(t *testing.T) {
+	files := []db.Attachment{{Filename: "notes.txt"}, {Filename: "Q3 <Report>.pdf"}}
+	words := []string{"report"}
+	if got, want := fileSnippet(files, words, ""), "📎 Q3 &lt;<mark>Report</mark>&gt;.pdf"; got != want {
+		t.Errorf("file only: got %q, want %q", got, want)
+	}
+	if got, want := fileSnippet(files, words, "see attached"), "📎 Q3 &lt;<mark>Report</mark>&gt;.pdf — see attached"; got != want {
+		t.Errorf("with text: got %q, want %q", got, want)
+	}
+	if got, want := fileSnippet(files, words, "the <mark>report</mark>"), "the <mark>report</mark>"; got != want {
+		t.Errorf("text hit: got %q, want %q", got, want)
+	}
+	if got, want := fileSnippet(files, []string{"budget"}, "hi"), "hi"; got != want {
+		t.Errorf("no file hit: got %q, want %q", got, want)
 	}
 }
