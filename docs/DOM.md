@@ -177,6 +177,8 @@ strings, so the templates are where message/row structure lives.
       #attachment-tray      pending uploads, JS toggles [hidden]
       #composer-input       <textarea>
       #attach-btn           button
+      #wrap-btn             button: types "```wrap ```" at the caret (around
+                            the selection), caret inside
       #file-input           <input type=file multiple hidden>
       #send-btn             submit
 #palette                    Ctrl/⌘+K overlay, JS toggles [hidden]

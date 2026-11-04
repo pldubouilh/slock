@@ -1270,9 +1270,34 @@ function renderBodyRun(el, body) {
   if (tail || !afterFence) renderTextBlock(el, tail);
 }
 
+// ```wrap …```: the block is folded to five lines, with a copy button for its
+// text. A click on the folded block (or its chevron) unfolds it, up to the
+// visible message pane's height and scrolling inside past that; the chevron
+// folds it back. `wrap` takes a line of its own or a space before content on
+// the same line ("```wrap ls -la```").
+//
+// Which blocks were unfolded lasts the session, by their text, so a re-render
+// for a reaction doesn't fold them back. Whether a block is taller than its
+// fold (so has anything to unfold) takes layout: wrapRO measures it.
+const CODE_WRAP = /^wrap(?:[ \t]*\n| +)/;
+const openedWraps = new Set();
+const wrapRO = 'ResizeObserver' in window
+  ? new ResizeObserver((entries) => {
+    for (const { target: pre } of entries) {
+      const box = pre.parentElement;
+      if (box && !box.classList.contains('is-open')) {
+        box.classList.toggle('is-tall', pre.scrollHeight > pre.clientHeight + 1);
+      }
+    }
+  })
+  : null;
+
 function appendCodeBlock(el, raw) {
   let text = raw;
-  if (text.startsWith('\n')) {
+  const wrap = CODE_WRAP.exec(text);
+  if (wrap) {
+    text = text.slice(wrap[0].length);
+  } else if (text.startsWith('\n')) {
     text = text.slice(1); // opening fence ended its line; content starts next
   } else {
     // A bare token glued to the fence then a newline is a language hint (```go)
@@ -1281,11 +1306,68 @@ function appendCodeBlock(el, raw) {
     if (info) text = text.slice(info[0].length);
   }
   text = text.replace(/\n$/, ''); // closing fence sat on its own line
+  if (wrap) text = text.replace(/[ \t]+$/, ''); // "```wrap ls -la ```" copies "ls -la"
   const pre = document.createElement('pre');
   const code = document.createElement('code');
   code.textContent = text;
   pre.append(code);
-  el.append(pre);
+  if (!wrap) {
+    el.append(pre);
+    return;
+  }
+  const box = document.createElement('div');
+  box.className = 'code-wrap';
+  if (!wrapRO) box.classList.add('is-tall'); // can't measure: always offer it
+  const fold = document.createElement('button');
+  fold.type = 'button';
+  fold.className = 'iconbtn code-fold';
+  fold.innerHTML = '<svg class="ic" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg>';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'iconbtn code-copy';
+  btn.setAttribute('aria-label', 'Copy code');
+  btn.title = 'Copy code';
+  btn.innerHTML = '<svg class="ic" viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7.5" y="7.5" width="9" height="9" rx="1.5"/><path d="M12.5 7.5V5A1.5 1.5 0 0 0 11 3.5H5A1.5 1.5 0 0 0 3.5 5v6A1.5 1.5 0 0 0 5 12.5h2.5"/></svg>';
+  const set = (open) => {
+    box.classList.toggle('is-open', open);
+    fold.setAttribute('aria-expanded', open ? 'true' : 'false');
+    fold.setAttribute('aria-label', open ? 'Fold code' : 'Unfold code');
+    fold.title = open ? 'Fold' : 'Unfold';
+    if (open) openedWraps.add(text); else openedWraps.delete(text);
+  };
+  set(openedWraps.has(text));
+  // Unfolded by a click: brought fully into view, scrolling the pane as little
+  // as it takes (the block is capped to the pane, so it always fits).
+  const unfold = () => {
+    set(true);
+    requestAnimationFrame(() => box.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+  };
+  // All kept from the row's own click / Enter, like the [more] toggle.
+  fold.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (box.classList.contains('is-open')) {
+      set(false);
+      pre.scrollTop = 0;
+    } else {
+      unfold();
+    }
+  });
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    copyText(text, 'Code copied');
+  });
+  // The folded block itself unfolds on a click — not on the end of a drag
+  // that selected some of it.
+  pre.addEventListener('click', (e) => {
+    if (box.classList.contains('is-open') || !box.classList.contains('is-tall')) return;
+    if (String(getSelection() || '')) return;
+    e.stopPropagation();
+    unfold();
+  });
+  for (const b of [fold, btn]) b.addEventListener('keydown', (e) => e.stopPropagation());
+  box.append(pre, fold, btn);
+  el.append(box);
+  if (wrapRO) wrapRO.observe(pre);
 }
 
 // One run of non-fenced text: `> ` quote groups and inline formatting, with
@@ -3657,6 +3739,22 @@ function restoreDraft(channelId) {
   autogrow();
 }
 
+/* -------- composer wrap button */
+
+// #wrap-btn: types a ```wrap``` fence (see appendCodeBlock) into the box, the
+// caret inside it — or around the selection, when there is one.
+function insertWrapFence() {
+  const ta = byId('composer-input');
+  if (!ta) return;
+  const { selectionStart: a, selectionEnd: b, value } = ta;
+  const open = '```wrap ';
+  ta.value = value.slice(0, a) + open + value.slice(a, b) + '```' + value.slice(b);
+  ta.focus();
+  ta.setSelectionRange(a + open.length, b + open.length);
+  autogrow();
+  queueDraftSave();
+}
+
 /* -------- composer edit mode */
 
 let editPrevText = ''; // what the composer held before ↑ / .msg-edit
@@ -4201,6 +4299,10 @@ function wireUploads() {
     const fi = byId('file-input');
     if (fi) fi.click();
   });
+  // Like #send-btn: a tap must not take focus from the box (on phones that
+  // closes the keyboard).
+  on(byId('wrap-btn'), 'mousedown', (e) => e.preventDefault());
+  on(byId('wrap-btn'), 'click', insertWrapFence);
   on(byId('file-input'), 'change', (e) => {
     if (e.target.files && e.target.files.length) addFiles([...e.target.files]);
     e.target.value = '';

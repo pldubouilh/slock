@@ -870,6 +870,9 @@ body.nav-open .nav-backdrop { opacity: 1; pointer-events: auto; }
      time in a trace. It already clipped its content (a scroller), and nothing
      inside is position: fixed, so the containment changes nothing visible. */
   contain: strict;
+  /* Its height is the visible message pane: an unfolded ```wrap``` block caps
+     itself to it (cqh). Free here — strict already contains its size. */
+  container-type: size;
 }
 
 #message-list { padding: var(--sp-2) 0 var(--sp-1); }
@@ -1177,6 +1180,7 @@ body.view-note .composer-area { display: none; }
   max-height: 4.5em; /* 3 × line-height 1.5, for blocks the clamp can't count */
 }
 .msg--latest .msg-body pre,
+.msg--latest .msg-body .code-wrap,
 .msg--latest .msg-body blockquote { margin-block: 0; overflow: hidden; }
 
 .latest-chan {
@@ -1288,6 +1292,45 @@ body.view-note .composer-area { display: none; }
 }
 .msg-body pre code { background: none; border: 0; padding: 0; }
 
+/* ```wrap …```: the block folded to five lines, a fade over its cut edge, with
+   its buttons pinned top right (outside the scroller, so they stay put).
+   Unfolded (.is-open) it grows to the height of the visible message pane and
+   scrolls inside past that. .is-tall: there is more than
+   the fold shows. */
+.msg-body .code-wrap { position: relative; margin: 6px 0 2px; }
+.msg-body .code-wrap pre {
+  margin: 0;
+  padding-inline-end: 72px; /* clear of the buttons */
+  box-sizing: content-box; /* five lines of text, plus the padding */
+  max-height: 7.5em; /* 5 × line-height 1.5, before lh */
+  max-height: 5lh;
+  overflow: hidden;
+}
+.msg-body .code-wrap.is-tall:not(.is-open) pre {
+  cursor: pointer;
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5em), rgb(0 0 0 / 0.45));
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.5em), rgb(0 0 0 / 0.45));
+}
+.msg-body .code-wrap.is-open pre {
+  max-height: 80dvh; /* before container units */
+  /* the pane's height, less the block's padding, border and some air */
+  max-height: calc(100cqh - 72px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.code-copy, .code-fold {
+  position: absolute;
+  inset-block-start: 4px;
+  inset-inline-end: 4px;
+  width: 28px;
+  height: 28px;
+}
+.code-fold { inset-inline-end: 34px; }
+.code-wrap:not(.is-tall):not(.is-open) .code-fold { display: none; }
+.code-fold .ic { transition: transform var(--t-fast) var(--ease); }
+.code-wrap.is-open .code-fold .ic { transform: rotate(180deg); }
+.code-copy:hover, .code-fold:hover { background: var(--bg-3); }
+
 /* `> ` lines, grouped by renderBody — the classic quote bar */
 .msg-body blockquote {
   margin: 5px 0 2px;
@@ -1337,6 +1380,7 @@ body.density-compact .msg-head {
 }
 /* code blocks and quotes start on their own line, clear of the floated head */
 body.density-compact .msg-body pre,
+body.density-compact .msg-body .code-wrap,
 body.density-compact .msg-body blockquote { clear: inline-start; }
 
 /* variants */
@@ -1400,8 +1444,10 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
 .msg-more:hover, .msg-more:focus-visible { text-decoration-thickness: 2px; }
 
 /* [more] … [/more] in a message: the folded part, then its toggle. Opened,
-   the part reads as the rest of the message; only the quiet toggle says it
-   folds. */
+   the part reads as the rest of the message, a blank line standing where its
+   [more] line was; only the quiet toggle says it folds. */
+.more-body { padding-block-start: 1.5em; } /* one line, line-height 1.5 */
+.more-body { padding-block-start: 1lh; }
 .more-toggle {
   display: inline-flex;
   align-items: center;
