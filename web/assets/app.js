@@ -121,6 +121,63 @@ function copyText(text, label) {
     .catch(() => toast('Could not copy', true));
 }
 
+/* ============================================================ startup trace */
+
+// A start that stalls leaves the bare shell with nothing on it to say why (a
+// read that never answers raises no banner, an exception shows nothing). So
+// until boot has a conversation open, its steps and every API call are noted
+// here with their time since the page started; still not through after
+// BOOT_STUCK_MS, the notes go on the empty message pane — something to
+// screenshot — and keep updating there until boot gets through.
+const BOOT_STUCK_MS = 15000;
+let bootLog = []; // null once boot is through
+let bootLogTimer = 0;
+
+function bootNote(text) {
+  if (!bootLog) return;
+  bootLog.push(`${(performance.now() / 1000).toFixed(1)}s  ${text}`);
+  if (byId('boot-trace')) paintBootLog();
+}
+
+function paintBootLog() {
+  const scroll = byId('message-scroll');
+  if (!bootLog || !scroll) return;
+  let box = byId('boot-trace');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'boot-trace';
+    const title = document.createElement('p');
+    title.className = 'boot-trace-title';
+    title.textContent = 'Still starting…';
+    const pre = document.createElement('pre');
+    const reload = document.createElement('button');
+    reload.type = 'button';
+    reload.className = 'linkbtn';
+    reload.textContent = 'Reload';
+    reload.addEventListener('click', () => location.reload());
+    box.append(title, pre, reload);
+    scroll.prepend(box);
+  }
+  const sw = !('serviceWorker' in navigator) ? 'no worker support'
+    : navigator.serviceWorker.controller ? 'worker in control' : 'no worker in control';
+  const head = `server ${bootedVersion || '?'} · ${sw} · ${navigator.onLine ? 'online' : 'offline'} · ${document.visibilityState}`;
+  box.querySelector('pre').textContent = [head, ...bootLog].join('\n');
+}
+
+function bootThrough() {
+  bootLog = null;
+  clearTimeout(bootLogTimer);
+  const box = byId('boot-trace');
+  if (box) box.remove();
+}
+
+for (const type of ['error', 'unhandledrejection']) {
+  window.addEventListener(type, (e) => {
+    const err = type === 'error' ? (e.error || e.message) : e.reason;
+    bootNote(`${type}: ${(err && (err.stack || err.message)) || err}`);
+  });
+}
+
 /* ============================================================ api */
 
 // The reads sw.js keeps (channel list, a channel's newest page, a note, …)
@@ -184,9 +241,13 @@ async function api(path, opts = {}) {
 
 async function apiFetch(path, init, doToast, reqId) {
   let res;
+  const t0 = performance.now();
+  const took = () => `${((performance.now() - t0) / 1000).toFixed(1)}s`;
+  bootNote(`→ ${path}${init.cache === 'no-cache' ? ' (network first)' : ''}`);
   try {
     res = await fetch(path, init);
   } catch (err) {
+    bootNote(`✗ ${path} ${err.name === 'AbortError' ? 'dropped' : 'failed'} after ${took()}`);
     if (err.name === 'AbortError') throw err;
     // Deliberately silent: the connection banner already says we are offline,
     // and anything that retries would otherwise bury the screen in identical
@@ -197,6 +258,8 @@ async function apiFetch(path, init, doToast, reqId) {
     e.code = 'network';
     throw e;
   }
+  bootNote(`← ${path} ${res.status} ${res.headers.get('X-Slock-Revalidating') ? 'stored'
+    : res.headers.get('X-Slock-Offline') ? 'stored (network failed)' : 'network'} in ${took()}`);
   // The service worker flags anything it served from its offline store, so the
   // connection banner can say "saved messages" rather than "reconnecting".
   if (res.headers.get('X-Slock-Offline')) state.offlineCache = true;
@@ -9030,7 +9093,46 @@ function wireSwipe() {
 
 /* ============================================================ boot */
 
+// The reads boot cannot start without, tried until they land: with nothing
+// stored (or no worker) on a dead or crawling connection, a failed start used
+// to leave the empty shell up for good — the app had to be killed. An attempt
+// still waiting after `limit` is dropped and made again (a request stuck on a
+// connection that died under it can hang for minutes; a new one often goes
+// straight through), with more patience each time for a link that is merely
+// slow. Waits between attempts double up to 15s, cut short when the browser
+// says it is back online or the app comes back to the screen; the banner says
+// what is going on meanwhile. A stored copy answers well inside any limit.
+async function untilLoaded(load) {
+  for (let wait = 1000, limit = 10000; ; wait = Math.min(wait * 2, 15000), limit = Math.min(limit * 2, 60000)) {
+    const ctl = new AbortController();
+    const cut = setTimeout(() => ctl.abort(), limit);
+    try {
+      return await load(ctl.signal);
+    } catch (err) {
+      if (err.code === 'unauthorized') throw err;
+    } finally {
+      clearTimeout(cut);
+    }
+    setOffline(true);
+    bootNote(`retrying in ${wait / 1000}s`);
+    await new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        window.removeEventListener('online', done);
+        document.removeEventListener('visibilitychange', shown);
+        resolve();
+      };
+      const shown = () => { if (!document.hidden) done(); };
+      const timer = setTimeout(done, wait);
+      window.addEventListener('online', done);
+      document.addEventListener('visibilitychange', shown);
+    });
+  }
+}
+
 async function boot() {
+  bootLogTimer = setTimeout(paintBootLog, Math.max(0, BOOT_STUCK_MS - performance.now()));
+  bootNote('boot');
   // The app lays itself out to the viewport and never scrolls the document;
   // a scroll offset restored by a reload (an update, a refresh with the
   // keyboard up) would just crop it.
@@ -9053,8 +9155,9 @@ async function boot() {
 
   let meData;
   try {
-    meData = await api('/api/auth/me', {
+    meData = await untilLoaded((signal) => api('/api/auth/me', {
       toast: false,
+      signal,
       // The stored identity answers first (sw.js). A different person behind
       // the live one means everything shown belongs to someone else.
       onFresh: (fresh) => {
@@ -9064,10 +9167,11 @@ async function boot() {
         state.pushKey = fresh.push_public_key || state.pushKey;
         applyUserUpdate(fresh.user);
       },
-    });
+    }));
   } catch {
-    return; // 401 already redirected; network error leaves the shell
+    return; // 401: already on its way to the login page
   }
+  bootNote('identity in');
   state.me = meData.user;
   state.mustChangePw = !!meData.must_change_pw;
   state.pushKey = meData.push_public_key || '';
@@ -9098,26 +9202,29 @@ async function boot() {
     .catch(() => {});
 
   // Server build id, in parallel; the SSE `hello` frame also carries it and
-  // whichever lands first wins (they agree unless a deploy races us).
-  api('/api/version', { toast: false })
+  // whichever lands first wins (they agree unless a deploy races us). Asked of
+  // the network (the stored copy only if it fails): a stored id is the build
+  // before the last deploy, which made the hello look like a new one and
+  // reloaded the page, then registered the old worker again.
+  api('/api/version', { toast: false, fresh: true })
     .then((data) => noteVersion(data.version || ''))
     .catch(() => {});
 
   try {
     // Stored copies first (sw.js); the live ones repaint when they differ.
     const startedAt = Date.now();
-    const [chanData, userData] = await Promise.all([
-      api('/api/channels', { onFresh: (fresh) => fresh && applyChannelList(fresh, startedAt) }),
-      api('/api/users', { onFresh: (fresh) => fresh && applyUserList(fresh.users) }),
-    ]);
+    const [chanData, userData] = await untilLoaded((signal) => Promise.all([
+      api('/api/channels', { toast: false, signal, onFresh: (fresh) => fresh && applyChannelList(fresh, startedAt) }),
+      api('/api/users', { toast: false, signal, onFresh: (fresh) => fresh && applyUserList(fresh.users) }),
+    ]));
     for (const u of userData.users) state.users.set(u.id, u);
     state.users.set(state.me.id, state.me);
     setChannels(chanData);
   } catch {
-    toast('Could not load channels', true);
-    return; // the outbox stays on disk for the next start
+    return; // 401: on its way to the login page (the outbox stays on disk)
   }
 
+  bootNote('channels and users in');
   renderSidebar();
   updateBadges();
   // Unconfirmed messages from earlier sessions go back in their channels; the
@@ -9130,6 +9237,7 @@ async function boot() {
   const wantLatest = params.get('c') === 'latest'
     || (!params.get('c') && localStorage.getItem(LS.lastChannel) === 'latest');
   if (wantLatest) {
+    bootNote('opening Latest');
     await openLatest();
   } else {
     let target = Number(params.get('c')) || Number(localStorage.getItem(LS.lastChannel)) || 0;
@@ -9139,11 +9247,13 @@ async function boot() {
       target = member ? member.id : 0;
     }
     const jumpTo = Number(params.get('m')) || 0;
+    bootNote(`opening ${target || 'nothing'}`);
     if (target) await openChannel(target, jumpTo ? { jumpTo } : {});
   }
   // After the first channel: the trail starts at a real entry, and the phone
   // trap needs a channel to name.
   wireBackButton();
+  bootThrough();
 
   connectSSE();
   await registerSW();

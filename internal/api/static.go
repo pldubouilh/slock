@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"slock/internal/httpx"
+	"slock/internal/version"
 	webui "slock/web"
 )
 
@@ -86,6 +87,9 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if ct := contentTypeFor(name); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
+	// Which build this file belongs to: sw.js keeps only files of its own
+	// build in its shell cache, so a refresh racing a deploy cannot mix two.
+	w.Header().Set("X-Slock-Version", version.String())
 	switch {
 	case name == "sw.js":
 		// The service worker must never be served stale, or updates never land.

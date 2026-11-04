@@ -32,11 +32,34 @@ const SHELL = [
   '/icons/apple-touch-icon.png',
 ];
 
+// What may go in the shell cache: a whole, direct answer from the server of
+// this worker's own build (X-Slock-Version, set on every static file). A
+// background refresh right after a deploy would otherwise put the new build's
+// index.html or app.js among the old build's files — and the next start, on a
+// connection that got only one of them across, ran a mix of the two.
+function shellOK(res) {
+  if (!res.ok || res.redirected || res.type !== 'basic') return false;
+  const v = res.headers.get('X-Slock-Version');
+  return !v || VERSION === 'dev' || v === VERSION;
+}
+
+async function refreshShell(req) {
+  try {
+    const res = await fetch(req, { cache: 'no-cache' });
+    if (!shellOK(res)) return;
+    await (await caches.open(CACHE)).put(req, res);
+    await sweepOldShells();
+  } catch { /* offline */ }
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
     // Tolerate individual misses (icon set may vary) — addAll would fail whole.
-    await Promise.allSettled(SHELL.map((url) => cache.add(url)));
+    await Promise.allSettled(SHELL.map(async (url) => {
+      const res = await fetch(url, { cache: 'no-cache' });
+      if (shellOK(res)) await cache.put(url, res);
+    }));
     await self.skipWaiting();
   })());
 });
@@ -151,6 +174,10 @@ function matchStored(cache, req, url) {
   return cache.match(req, { ignoreSearch: url.pathname !== '/api/latest' });
 }
 
+// What may go in the API store: a direct JSON answer.
+const apiOK = (res) => res.ok && !res.redirected
+  && /json/i.test(res.headers.get('Content-Type') || '');
+
 async function putApi(req, url, res) {
   const cache = await caches.open(API_CACHE);
   if (url.pathname === '/api/auth/me') return putMe(cache, req, res);
@@ -190,7 +217,7 @@ async function storePages(list) {
       if (stored && !pageBehind(await stored.json(), ch)) continue;
       let res;
       try { res = await fetch(url); } catch { return; } // offline: next list
-      if (res.ok) await putMessages(cache, new Request(url), res);
+      if (apiOK(res)) await putMessages(cache, new Request(url), res);
     }
   })();
   try { await storing; } catch { /* best effort */ } finally { storing = null; }
@@ -213,7 +240,11 @@ function pageBehind(page, ch) {
 // network fails.
 async function answerApi(event, req, url) {
   const cache = await caches.open(API_CACHE);
-  const cached = await matchStored(cache, req, url);
+  let cached = await matchStored(cache, req, url);
+  if (cached && !apiOK(cached)) { // kept before the check above existed
+    await forget(cache, req, url);
+    cached = null;
+  }
   if (cached && req.cache !== 'no-cache' && req.cache !== 'reload') {
     const text = await cached.clone().text();
     event.waitUntil(revalidate(event.clientId, req, url, text));
@@ -223,7 +254,7 @@ async function answerApi(event, req, url) {
     const res = await fetch(req);
     // Hand the page its response immediately and store a clone in the
     // background: a channel open must not wait on a cache write.
-    if (res.ok) event.waitUntil(putApi(req, url, res.clone()));
+    if (apiOK(res)) event.waitUntil(putApi(req, url, res.clone()));
     else if (lostAccess(res)) event.waitUntil(forget(cache, req, url));
     return res;
   } catch {
@@ -238,7 +269,7 @@ async function revalidate(clientId, req, url, storedText) {
   try {
     const res = await fetch(req);
     msg.status = res.status;
-    if (res.ok) {
+    if (apiOK(res)) {
       const text = await res.clone().text();
       await putApi(req, url, res);
       if (text !== storedText) msg.body = text;
@@ -292,15 +323,7 @@ self.addEventListener('fetch', (event) => {
       if (url.pathname === '/') {
         const cached = await caches.match('/');
         if (cached) {
-          event.waitUntil((async () => {
-            try {
-              const res = await fetch(req);
-              if (res.ok) {
-                await (await caches.open(CACHE)).put('/', res);
-                await sweepOldShells();
-              }
-            } catch { /* offline */ }
-          })());
+          event.waitUntil(refreshShell(new Request('/')));
           return cached;
         }
       }
@@ -320,7 +343,7 @@ self.addEventListener('fetch', (event) => {
       const cached = await caches.match(req);
       if (cached) return cached;
       const res = await fetch(req);
-      if (res.ok) {
+      if (shellOK(res)) {
         const cache = await caches.open(CACHE);
         cache.put(req, res.clone());
       }
@@ -334,20 +357,12 @@ self.addEventListener('fetch', (event) => {
   event.respondWith((async () => {
     const cached = await caches.match(req);
     if (cached) {
-      event.waitUntil((async () => {
-        try {
-          const res = await fetch(req);
-          if (res.ok) {
-            await (await caches.open(CACHE)).put(req, res);
-            await sweepOldShells();
-          }
-        } catch { /* offline */ }
-      })());
+      event.waitUntil(refreshShell(req));
       return cached;
     }
     try {
       const res = await fetch(req);
-      if (res.ok) {
+      if (shellOK(res)) {
         const cache = await caches.open(CACHE);
         cache.put(req, res.clone());
       }
