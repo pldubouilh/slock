@@ -189,6 +189,9 @@ for (const type of ['error', 'unhandledrejection']) {
 let apiReqSeq = 0;
 const freshWaiters = new Map(); // X-Slock-Req id -> {onFresh, answered, early, timer}
 const fromStore = new WeakSet();
+// Answers the worker fell back to its store for, the network having failed
+// (X-Slock-Offline): older than anything the page has learnt since.
+const fromOffline = new WeakSet();
 // The worker always answers, but a worker stopped mid-fetch never does: past
 // this, the stored copy is taken as current (onFresh(null)), so nothing waits
 // on it forever — a channel left unread, unable to page back.
@@ -262,7 +265,8 @@ async function apiFetch(path, init, doToast, reqId) {
     : res.headers.get('X-Slock-Offline') ? 'stored (network failed)' : 'network'} in ${took()}`);
   // The service worker flags anything it served from its offline store, so the
   // connection banner can say "saved messages" rather than "reconnecting".
-  if (res.headers.get('X-Slock-Offline')) state.offlineCache = true;
+  const offline = !!res.headers.get('X-Slock-Offline');
+  if (offline) state.offlineCache = true;
   if (res.status === 401) {
     location.href = '/login.html';
     throw Object.assign(new Error('Unauthorized'), { code: 'unauthorized' });
@@ -270,6 +274,7 @@ async function apiFetch(path, init, doToast, reqId) {
   if (res.status === 204) return null;
   let data = null;
   try { data = await res.json(); } catch { /* non-JSON body */ }
+  if (offline && data && typeof data === 'object') fromOffline.add(data);
   if (!res.ok) {
     const e = new Error((data && data.message) || `Request failed (${res.status})`);
     e.code = (data && data.error) || 'internal';
@@ -482,6 +487,10 @@ async function refetchChannels() {
   try {
     const startedAt = Date.now();
     const data = await api('/api/channels', { toast: false, fresh: true });
+    // The network failed and the worker answered with its stored list: what
+    // the page holds is newer (reads since, messages over SSE) — putting the
+    // stored counts back lit up channels already read.
+    if (fromOffline.has(data)) return;
     applyChannelList(data, startedAt);
   } catch (err) {
     if (err.code !== 'network') console.warn('channel refetch failed', err);
@@ -3531,11 +3540,19 @@ function sendMarkRead(channelId) {
   updateBadges();
   readInflight.set(channelId, (readInflight.get(channelId) || 0) + 1);
   api(`/api/channels/${channelId}/read`, { method: 'POST', body: { last_message_id: lastId }, toast: false })
+    .then(() => storedRead(channelId))
     .catch(() => state.lastReadSent.delete(channelId))
     .finally(() => {
       readInflight.set(channelId, Math.max(0, (readInflight.get(channelId) || 1) - 1));
       readDoneAt.set(channelId, Date.now());
     });
+}
+
+// A read reaches the worker's stored channel list too (sw.js, markStoredRead),
+// or the next start would show the channel unread again from it.
+function storedRead(channelId) {
+  const sw = 'serviceWorker' in navigator && navigator.serviceWorker.controller;
+  if (sw) sw.postMessage({ type: 'channel-read', channel_id: channelId });
 }
 
 // Commit any pending read immediately — used when leaving a channel so a quick
@@ -5293,6 +5310,7 @@ function connectSSE() {
   es.addEventListener('channel.read', (e) => {
     const { channel_id } = JSON.parse(e.data);
     const ch = state.channels.get(channel_id);
+    storedRead(channel_id);
     if (ch) {
       ch.unread_count = 0;
       renderSidebar();

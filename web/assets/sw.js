@@ -94,6 +94,10 @@ self.addEventListener('activate', (event) => {
 // device must not inherit the first one's messages.
 self.addEventListener('message', (event) => {
   const data = event.data || {};
+  if (data.type === 'channel-read' && typeof data.channel_id === 'number') {
+    event.waitUntil(markStoredRead(data.channel_id));
+    return;
+  }
   if (data.type !== 'clear-cache') return;
   event.waitUntil((async () => {
     await caches.delete(API_CACHE);
@@ -182,10 +186,41 @@ async function putApi(req, url, res) {
   const cache = await caches.open(API_CACHE);
   if (url.pathname === '/api/auth/me') return putMe(cache, req, res);
   if (url.pathname.endsWith('/messages')) return putMessages(cache, req, res);
-  await cache.put(req, res.clone());
-  if (url.pathname === '/api/channels') {
-    try { await storePages(await res.clone().json()); } catch { /* not a list */ }
+  if (url.pathname !== '/api/channels') {
+    await cache.put(req, res.clone());
+    return;
   }
+  const copy = res.clone();
+  await listWrite(() => cache.put(req, copy));
+  try { await storePages(await res.clone().json()); } catch { /* not a list */ }
+}
+
+// The stored channel list is as old as its last fetch, but channels get read
+// after that — here, or on another device (channel.read). Left alone, its
+// unread counts would light those channels up again on the next start, or
+// whenever a refetch falls back to it. So the page reports each read
+// ('channel-read' message) and it is zeroed in the stored list too. Writes to
+// the list go one at a time, so a read can't land on an older list over a
+// newer one.
+let listWrites = Promise.resolve();
+const listWrite = (fn) => (listWrites = listWrites.then(fn).catch(() => {}));
+
+function markStoredRead(channelId) {
+  return listWrite(async () => {
+    const cache = await caches.open(API_CACHE);
+    const [key] = await cache.keys('/api/channels', { ignoreSearch: true });
+    const stored = key && await cache.match(key);
+    if (!stored || !apiOK(stored)) return;
+    const list = await stored.json();
+    let changed = false;
+    for (const c of [...(list.channels || []), ...(list.dms || []), ...(list.notes || [])]) {
+      if (c.id === channelId && c.unread_count) { c.unread_count = 0; changed = true; }
+    }
+    if (!changed) return;
+    await cache.put(key, new Response(JSON.stringify(list), {
+      status: stored.status, statusText: stored.statusText, headers: stored.headers,
+    }));
+  });
 }
 
 // Every channel you are in keeps its newest page stored, so it opens at once
@@ -416,10 +451,13 @@ self.addEventListener('push', (event) => {
         const resp = await fetch('/api/channels', { signal: ctl.signal });
         clearTimeout(timer);
         if (resp.ok) {
-          const chans = (await resp.json()).channels || [];
+          // DMs and notes too: a DM read elsewhere used to be shown anyway,
+          // and left out of the badge. Muted ones don't count, as in the page.
+          const list = await resp.json();
+          const chans = [...(list.channels || []), ...(list.dms || []), ...(list.notes || [])];
           const ch = chans.find((c) => c.id === data.channel_id);
           if (ch && !ch.unread_count) show = false;
-          badge = chans.reduce((n, c) => n + (c.unread_count || 0), 0);
+          badge = chans.reduce((n, c) => n + (c.muted ? 0 : c.unread_count || 0), 0);
         }
       } catch { /* can't tell — show it */ }
     }

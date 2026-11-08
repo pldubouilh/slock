@@ -379,8 +379,9 @@ func (s *Server) pushToUser(ctx context.Context, userID int64, n push.Notificati
 	return failed == 0 || failed < len(subs)
 }
 
-// unreadTotal counts a user's unread messages across every channel they are in;
-// it is the number the PWA shows on the app badge.
+// unreadTotal counts a user's unread messages across every channel they are in,
+// muted ones aside (as the page counts them); it is the number the PWA shows on
+// the app badge.
 func (s *Server) unreadTotal(ctx context.Context, userID int64) int {
 	var n int
 	// Bounded per channel, exactly like the channel list: this runs once per
@@ -403,7 +404,7 @@ func (s *Server) unreadTotal(ctx context.Context, userID int64) int {
 		          LIMIT %d
 		     ) x
 		 ) capped
-		 WHERE cm.user_id = $1`, unreadCap), userID).Scan(&n)
+		 WHERE cm.user_id = $1 AND NOT cm.muted`, unreadCap), userID).Scan(&n)
 	if err != nil {
 		log.Printf("api: unread total for user %d: %v", userID, err)
 		return 0
