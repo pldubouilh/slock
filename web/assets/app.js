@@ -358,7 +358,7 @@ function chanState(id) {
       loaded: false, loadingOlder: false, hasMore: true,
       cached: false, // msgs are sw.js's stored page; the live one is coming
       olderRetryAt: 0, // don't re-ask for history before this (see loadOlder)
-      stale: false, unreadStartId: null, jumpCount: 0,
+      stale: false, gapAfter: 0, unreadStartId: null, jumpCount: 0,
       // Detached: showing a window around a jumped-to message rather than the
       // live end. Newer messages exist past the window and load on scrolling
       // down; live ones aren't appended (there'd be a gap). See loadAround.
@@ -1493,6 +1493,21 @@ function newestRealId(st) {
   return 0;
 }
 
+// The stream may have dropped messages (a reconnect, or a tab coming back
+// whose stream may have died silently). Each loaded channel remembers the
+// newest message it held right now, st.gapAfter: what follows it may have a
+// hole, and gapFill fetches from there. Messages that arrive live meanwhile
+// still append, so the newest one held is no longer where the hole starts:
+// catching up from it left the missed messages out for good. Every other
+// loaded channel catches up when next opened (st.stale).
+function markMissed() {
+  for (const [id, st] of state.chan) {
+    if (!st.loaded) continue;
+    if (!st.hasNewer && !st.gapAfter) st.gapAfter = newestRealId(st);
+    if (id !== state.currentId) st.stale = true;
+  }
+}
+
 // The newest page. sw.js may answer with its stored copy (st.cached) and the
 // live one follows (freshHistory).
 async function loadHistory(channelId) {
@@ -1539,6 +1554,7 @@ function fillHistory(channelId, data) {
   }
   st.loaded = true;
   st.stale = false;
+  st.gapAfter = 0;
   st.hasMore = !!data.has_more;
   st.hasNewer = false;
   st.parked = [];
@@ -1598,6 +1614,7 @@ async function loadAround(channelId, msgId) {
   for (const m of st.parked) st.byClient.set(m.client_id, m); // still retry and reconcile
   st.loaded = true;
   st.stale = false;
+  st.gapAfter = 0;
   st.hasMore = !!data.has_more;
   st.hasNewer = !!data.has_more_after;
   st.olderRetryAt = 0;
@@ -1758,13 +1775,24 @@ async function gapFill(channelId) {
   // A detached window has a deliberate hole up to the present; it fills by
   // scrolling down (loadNewer), not by stitching on from its newest message.
   if (!st.loaded || st.hasNewer) return;
-  let lastId = newestRealId(st);
+  let lastId = st.gapAfter || newestRealId(st);
   if (!lastId) return;
+  // A missed message is older than what arrived live after the gap: it goes
+  // in its place, not at the end. Server ids rise with time; unsent messages
+  // (no id yet) stay last.
+  let outOfOrder = false;
+  const reorder = () => {
+    if (!outOfOrder) return;
+    outOfOrder = false;
+    st.msgs.sort((a, b) => (a.id || Infinity) - (b.id || Infinity));
+    if (channelId === state.currentId) repaintMessages(channelId);
+  };
   for (let round = 0; round < 3; round++) {
     let data;
     try {
       data = await api(`/api/channels/${channelId}/messages?after=${lastId}&limit=200`, { toast: false });
     } catch {
+      reorder(); // what did arrive, in its place; the gap stays marked
       return;
     }
     for (const m of data.messages) {
@@ -1774,12 +1802,14 @@ async function gapFill(channelId) {
         continue;
       }
       const prev = st.msgs[st.msgs.length - 1] || null;
+      if (newestRealId(st) > m.id) outOfOrder = true;
       addMessageToState(channelId, m);
-      appendMsgToDom(channelId, m, prev);
+      if (!outOfOrder) appendMsgToDom(channelId, m, prev);
       lastId = m.id;
     }
     if (!data.has_more || !data.messages.length) {
       st.stale = false;
+      st.gapAfter = 0;
       break;
     }
     lastId = data.messages[data.messages.length - 1].id;
@@ -1788,9 +1818,11 @@ async function gapFill(channelId) {
       // page, so nothing in the middle is silently missing (and a read covers
       // the real newest message).
       try { await loadHistory(channelId); } catch { return; }
+      outOfOrder = false;
       if (channelId === state.currentId) renderMessagesFull(channelId);
     }
   }
+  reorder();
   if (channelId === state.currentId && state.atBottom) scrollToBottom();
   maybeMarkRead();
 }
@@ -5203,9 +5235,7 @@ function connectSSE() {
     renderSidebar();
     if (wasDown) {
       // Resync after any gap: unread counts + missed messages.
-      for (const [id, st] of state.chan) {
-        if (st.loaded && id !== state.currentId) st.stale = true;
-      }
+      markMissed();
       refetchChannels();
       flushOutbox(); // re-send anything that failed to send while offline
       const cur = state.channels.get(state.currentId);
@@ -8956,9 +8986,7 @@ function wireVisibility() {
       // silently while hidden (sleep, a parked phone app), dropping messages
       // for any channel. Treat it like a reconnect: every other loaded
       // channel catches up when next opened.
-      for (const [id, st] of state.chan) {
-        if (st.loaded && id !== state.currentId) st.stale = true;
-      }
+      markMissed();
       refetchChannels();
       if (state.currentId) gapFill(state.currentId);
       resyncNotes();
