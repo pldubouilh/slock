@@ -58,7 +58,9 @@ strings, so the templates are where message/row structure lives.
                         DMs, any unread) — those also count in the window title
                         / app badge and blip; a folded-away, un-surfaced channel
                         does none of that. The section head (with its controls)
-                        always stays so the fold can be undone.
+                        always stays so the fold can be undone. Only rows the
+                        sidebar shows as unread count (not notes, closed DMs or
+                        unjoined channels).
     Notes section           a .side-sec under Latest, headed "Notes" like
                         Channels: #fold-notes (.fold-btn chevron, .is-on and
                         flipped while folded; localStorage["slock:fold-notes"])
@@ -308,7 +310,7 @@ write `textContent` on the avatar element itself — that would delete the image
 - `#tpl-tray-item` → `.tray-item` with `.tray-item-name`,
   `.tray-item-progress`, `.tray-item-remove`
 - `#tpl-palette-item` → `li.pal-item` (dataset.kind = `channel|dm|user|search`,
-  dataset.id; `.pal-item--active` for keyboard focus)
+  dataset.id; `.pal-item--active` for keyboard focus; `.pal-item--unread` puts a red dot on the icon of an unmuted conversation with new messages)
   with `.pal-item-icon`, `.pal-item-title`, `.pal-item-sub`
 - `#tpl-search-result` → `li.pal-item.pal-result` with `.res-channel`,
   `.res-author`, `.res-time`, `.res-snippet`

@@ -2077,6 +2077,20 @@ body.density-compact .msg-body blockquote { clear: inline-start; }
   flex-shrink: 0;
 }
 .pal-item--active .pal-item-icon { color: var(--accent); }
+/* Unread conversation: a small red dot tucked on the icon's bottom-right
+   corner, in the badge red, ringed so it reads apart from the square. */
+.pal-item--unread .pal-item-icon { position: relative; }
+.pal-item--unread .pal-item-icon::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  inset-inline-end: -2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--badge-bg);
+  box-shadow: 0 0 0 2px var(--bg-3);
+}
 
 .pal-item-text { display: flex; flex-direction: column; min-width: 0; }
 

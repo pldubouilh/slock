@@ -3581,17 +3581,20 @@ function maybeMarkRead() {
   markReadTimer = setTimeout(flushMarkRead, 700);
 }
 
-function totalUnread() {
-  let n = 0;
-  for (const ch of state.channels.values()) {
-    if (isMuted(ch)) continue;
-    if (ch.kind === 'channel' && !ch.is_member) continue;
+// The conversations that light the title, the favicon dot and the app badge:
+// only ones the sidebar shows with their unread state, so the dot never points
+// at something nowhere to be found.
+function unreadChannels() {
+  return [...state.channels.values()].filter((ch) => {
+    if (!(ch.unread_count > 0) || isMuted(ch)) return false;
+    if (ch.kind === 'note') return false; // the note list shows no unread state
+    if (ch.kind === 'channel' && !ch.is_member) return false;
+    // Hidden from the DM list: closed on this device, or the old self-DM.
+    if (ch.kind === 'dm' && (closedDMs.has(ch.id) || isNotesChannel(ch))) return false;
     // Folded away and not surfaced (pinned, open, or mentioned): the user chose
     // to hide it, so it must not light the window title / app badge either.
-    if (!visibleInSidebar(ch)) continue;
-    n += ch.unread_count || 0;
-  }
-  return n;
+    return visibleInSidebar(ch);
+  });
 }
 
 // The window title reads "<workspace> - slock", so the app stays identifiable
@@ -3615,7 +3618,7 @@ function workspaceTitle() {
 // goes through a different title first, so the real one is a change. The same
 // goes for the favicon, which is re-linked.
 function updateBadges(force) {
-  const n = totalUnread();
+  const n = unreadChannels().reduce((sum, ch) => sum + ch.unread_count, 0);
   const title = workspaceTitle();
   const want = n > 0 ? `(${n}) ${title}` : title;
   if (force) document.title = want + '\u200b';
@@ -5718,6 +5721,7 @@ function renderPalette() {
     if (!li) return;
     li.dataset.kind = entry.kind;
     li.dataset.id = entry.id;
+    li.classList.toggle('pal-item--unread', !!entry.unread); // red dot on the icon
     const icon = li.querySelector('.pal-item-icon');
     // A remembered search wears the search bar's own magnifier.
     const lens = entry.lens && document.querySelector('#search-trigger svg');
