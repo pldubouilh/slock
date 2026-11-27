@@ -368,6 +368,7 @@ curl -H "Authorization: Bearer slk_..." \
 | Method | Path | Auth | Body |
 |---|---|---|---|
 | POST or GET | `/api/send/{target}` | `Authorization: Bearer <token>` or `X-Auth-Token` | the message |
+| PUT | `/api/send/{message id}` | same | the new text |
 
 - `{target}` is `channel`, `#channel` or `@user` (`#` optional; percent-encode
   it as `%23` if your tooling mangles it). `@user` matches a display name and
@@ -381,6 +382,19 @@ curl -H "Authorization: Bearer slk_..." \
   logs and browser history.
 - Messages post as the token's own bot user, so they render with the token's
   name and appear in realtime, unread counts and push exactly like any other.
+
+To amend a message, `PUT` the new text to the id the send answered with:
+
+```sh
+id=$(curl -s -H "Authorization: Bearer slk_..." -d 'deploying…' \
+     https://slock.example.com/api/send/releases | cut -d' ' -f2)
+curl -X PUT -H "Authorization: Bearer slk_..." -d 'deployed ✅' \
+     https://slock.example.com/api/send/$id
+```
+
+- The text is read and limited exactly as for a send (body, form `msg=`, or `?msg=`). It replaces the whole message, which shows as edited, and open clients update live (`message.update`, as an edit in the app). An edit never notifies or changes unread counts.
+- `200 ok <message id>`. A token can only edit its own bot's messages: anyone else's id answers `404`, as does one that doesn't exist. A deleted message answers `410`.
+- The scope is checked again, so a token narrowed since it posted (or whose bot was removed from a private channel) gets `403` for that conversation.
 
 Tokens are managed by admins:
 

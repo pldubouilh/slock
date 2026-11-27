@@ -149,6 +149,7 @@ func (s *Server) Routes() http.Handler {
 	// text out; no session, no JSON.
 	mux.HandleFunc("POST /api/send/{target}", s.open(s.handleSend))
 	mux.HandleFunc("GET /api/send/{target}", s.open(s.handleSend))
+	mux.HandleFunc("PUT /api/send/{target}", s.open(s.handleSendEdit)) // {target} is a message id
 
 	// -- static ----------------------------------------------------------
 	mux.HandleFunc("GET /", s.handleStatic)

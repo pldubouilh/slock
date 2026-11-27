@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -345,31 +346,11 @@ func bearerToken(r *http.Request) string {
 // The target is "#channel" or "@user" (the sigil is optional for channels).
 // The body is the message; ?msg= works too for the one-liner case.
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) error {
-	secret := bearerToken(r)
-	if secret == "" {
-		return sendError(w, http.StatusUnauthorized,
-			"no token: pass -H 'Authorization: Bearer slk_...'")
-	}
-
-	ctx := r.Context()
-	var (
-		tokenID  int64
-		botID    int64
-		scope    string
-		isActive bool
-	)
-	err := s.DB.Pool.QueryRow(ctx,
-		`SELECT id, user_id, scope, is_active FROM api_tokens WHERE token_hash = $1`,
-		hashToken(secret)).Scan(&tokenID, &botID, &scope, &isActive)
-	if err != nil {
-		if isNoRows(err) {
-			return sendError(w, http.StatusUnauthorized, "invalid token")
-		}
+	tok, done, err := s.sendToken(w, r)
+	if done || err != nil {
 		return err
 	}
-	if !isActive {
-		return sendError(w, http.StatusForbidden, "token is disabled")
-	}
+	ctx := r.Context()
 
 	target := strings.TrimSpace(r.PathValue("target"))
 	if decoded, derr := url.PathUnescape(target); derr == nil {
@@ -392,25 +373,171 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) error {
 		return sendError(w, http.StatusBadRequest, "message is too long (max %d characters)", maxBodyRunes)
 	}
 
-	channel, errMsg, status := s.resolveSendTarget(ctx, target, botID, scope)
+	channel, errMsg, status := s.resolveSendTarget(ctx, target, tok.botID, tok.scope)
 	if errMsg != "" {
 		return sendError(w, status, "%s", errMsg)
 	}
 
-	msg, err := s.postAsBot(ctx, channel, botID, body)
+	msg, err := s.postAsBot(ctx, channel, tok.botID, body)
 	if err != nil {
 		return err
 	}
-
-	if _, err := s.DB.Pool.Exec(ctx,
-		`UPDATE api_tokens SET last_used_at = now() WHERE id = $1`, tokenID); err != nil {
-		log.Printf("api: stamp token %d: %v", tokenID, err)
-	}
+	s.stampToken(ctx, tok.id)
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	fmt.Fprintf(w, "ok %d\n", msg.ID)
 	return nil
+}
+
+// sendTok is the API token behind a send request.
+type sendTok struct {
+	id    int64
+	botID int64 // the bot user it posts as
+	scope string
+}
+
+// sendToken authenticates a send API request. done means the error answer has
+// been written already.
+func (s *Server) sendToken(w http.ResponseWriter, r *http.Request) (tok sendTok, done bool, err error) {
+	secret := bearerToken(r)
+	if secret == "" {
+		return tok, true, sendError(w, http.StatusUnauthorized,
+			"no token: pass -H 'Authorization: Bearer slk_...'")
+	}
+	var isActive bool
+	err = s.DB.Pool.QueryRow(r.Context(),
+		`SELECT id, user_id, scope, is_active FROM api_tokens WHERE token_hash = $1`,
+		hashToken(secret)).Scan(&tok.id, &tok.botID, &tok.scope, &isActive)
+	if err != nil {
+		if isNoRows(err) {
+			return tok, true, sendError(w, http.StatusUnauthorized, "invalid token")
+		}
+		return tok, true, err
+	}
+	if !isActive {
+		return tok, true, sendError(w, http.StatusForbidden, "token is disabled")
+	}
+	return tok, false, nil
+}
+
+func (s *Server) stampToken(ctx context.Context, tokenID int64) {
+	if _, err := s.DB.Pool.Exec(ctx,
+		`UPDATE api_tokens SET last_used_at = now() WHERE id = $1`, tokenID); err != nil {
+		log.Printf("api: stamp token %d: %v", tokenID, err)
+	}
+}
+
+// handleSendEdit replaces the text of a message the token posted, by the id
+// the send answered with:
+//
+//	curl -X PUT -H "Authorization: Bearer slk_..." -d 'the build is red after all' \
+//	     https://slock.example.com/api/send/1234
+//
+// Only the token's own bot's messages, and only where the token may still post.
+func (s *Server) handleSendEdit(w http.ResponseWriter, r *http.Request) error {
+	tok, done, err := s.sendToken(w, r)
+	if done || err != nil {
+		return err
+	}
+	ctx := r.Context()
+
+	id, perr := strconv.ParseInt(strings.TrimSpace(r.PathValue("target")), 10, 64)
+	if perr != nil || id <= 0 {
+		return sendError(w, http.StatusBadRequest,
+			"not a message id: PUT /api/send/<id>, with the id a send answered (ok <id>)")
+	}
+
+	body, err := sendMessageText(r)
+	if err != nil {
+		return sendError(w, http.StatusBadRequest, "%s", err.Error())
+	}
+	if strings.TrimSpace(body) == "" {
+		return sendError(w, http.StatusBadRequest,
+			"empty message: put it in the request body, or use ?msg=...")
+	}
+	if utf8.RuneCountInString(body) > maxBodyRunes {
+		return sendError(w, http.StatusBadRequest, "message is too long (max %d characters)", maxBodyRunes)
+	}
+
+	var (
+		authorID  int64
+		channelID int64
+		createdAt time.Time
+		deletedAt *time.Time
+		kind      string
+		name      string
+	)
+	err = s.DB.Pool.QueryRow(ctx,
+		`SELECT m.user_id, m.channel_id, m.created_at, m.deleted_at, c.kind, c.name
+		   FROM messages m JOIN channels c ON c.id = m.channel_id
+		  WHERE m.id = $1`, id).
+		Scan(&authorID, &channelID, &createdAt, &deletedAt, &kind, &name)
+	// Someone else's message reads as missing: a token learns nothing about
+	// messages it didn't post.
+	if isNoRows(err) || (err == nil && authorID != tok.botID) {
+		return sendError(w, http.StatusNotFound, "no message %d from this token", id)
+	}
+	if err != nil {
+		return err
+	}
+	if deletedAt != nil {
+		return sendError(w, http.StatusGone, "message %d was deleted", id)
+	}
+
+	// The scope is checked again: a token narrowed since it posted may no
+	// longer touch that conversation.
+	if errMsg := s.sendEditAllowed(ctx, tok, channelID, kind, name); errMsg != "" {
+		return sendError(w, http.StatusForbidden, "%s", errMsg)
+	}
+
+	if _, err := s.DB.Pool.Exec(ctx,
+		`UPDATE messages SET body = $1, edited_at = now() WHERE id = $2`, body, id); err != nil {
+		return err
+	}
+	msg, err := s.loadMessage(ctx, id, tok.botID)
+	if err != nil {
+		return err
+	}
+	// As for an edit in the app: the frame carries the full body, so a
+	// limited-history member must not get the edit of a message from before
+	// their cutoff.
+	s.publishToChannelSince(ctx, channelID, createdAt, realtime.Event{
+		Type: "message.update", Data: map[string]any{"message": msg},
+	})
+	s.stampToken(ctx, tok.id)
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "ok %d\n", id)
+	return nil
+}
+
+// sendEditAllowed says why the token may not edit in this channel ("" if it
+// may): the same scope a send there would need, and still a member.
+func (s *Server) sendEditAllowed(ctx context.Context, tok sendTok, channelID int64, kind, name string) string {
+	switch kind {
+	case "channel":
+		if !scopeAllows(tok.scope, false, name) {
+			return fmt.Sprintf("this token may not post to #%s (scope: %s)", name, tok.scope)
+		}
+	case "dm":
+		var peer string
+		err := s.DB.Pool.QueryRow(ctx,
+			`SELECT u.display_name FROM channel_members cm JOIN users u ON u.id = cm.user_id
+			  WHERE cm.channel_id = $1 AND cm.user_id <> $2
+			  ORDER BY u.id LIMIT 1`, channelID, tok.botID).Scan(&peer)
+		if err != nil || !scopeAllows(tok.scope, true, peer) {
+			return fmt.Sprintf("this token may not post to @%s (scope: %s)", peer, tok.scope)
+		}
+	default:
+		return "this token may only edit in channels and DMs"
+	}
+	member, err := s.isMember(ctx, channelID, tok.botID)
+	if err != nil || !member {
+		return "this token's user is no longer in that conversation"
+	}
+	return ""
 }
 
 // sendMessageText reads the message: the request body if there is one,
