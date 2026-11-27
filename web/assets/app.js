@@ -1750,10 +1750,8 @@ function prependToDom(channelId, msgs) {
   // message, it is now mid-day — drop it.
   const last = msgs[msgs.length - 1];
   const firstChild = list.firstElementChild;
-  if (firstChild && firstChild.classList.contains('day-divider')
-    && firstChild.dataset.day === dayKey(last.created_at)) {
-    firstChild.remove();
-  }
+  const drop = firstChild && firstChild.classList.contains('day-divider')
+    && firstChild.dataset.day === dayKey(last.created_at) ? firstChild : null;
 
   const frag = document.createDocumentFragment();
   let prev = null;
@@ -1765,9 +1763,24 @@ function prependToDom(channelId, msgs) {
     prev = m;
   }
 
-  const before = sc.scrollHeight;
+  prependKeepingView(sc, list, frag, drop);
+}
+
+// Put older rows above the list without moving what is on screen. The
+// browser's own scroll anchoring may already hold the view in place (Chrome,
+// Firefox) or not (Safari), so measure a row that stays and undo only what it
+// actually moved: adding the height difference on top of the browser's own
+// correction threw the view down by a whole page. `drop` is a day divider
+// that goes in the same step (its day now continues from above).
+function prependKeepingView(sc, list, frag, drop) {
+  const ref = drop ? drop.nextElementSibling : list.firstElementChild;
+  const top0 = ref ? ref.getBoundingClientRect().top : 0;
+  if (drop) drop.remove();
   list.prepend(frag);
-  sc.scrollTop += sc.scrollHeight - before; // preserve position exactly
+  if (!ref) return;
+  const moved = ref.getBoundingClientRect().top - top0;
+  // Untouched when nothing moved, so a fling on a phone keeps its momentum.
+  if (Math.abs(moved) >= 1) sc.scrollTop += moved;
 }
 
 async function gapFill(channelId) {
@@ -2271,9 +2284,8 @@ function prependLatest(msgs) {
   if (!list || !sc || !state.latest) return;
   const last = msgs[msgs.length - 1];
   const first = list.firstElementChild;
-  if (first && first.classList.contains('day-divider') && first.dataset.day === dayKey(last.created_at)) {
-    first.remove();
-  }
+  const drop = first && first.classList.contains('day-divider')
+    && first.dataset.day === dayKey(last.created_at) ? first : null;
   const frag = document.createDocumentFragment();
   let prev = null;
   for (const m of msgs) {
@@ -2281,9 +2293,7 @@ function prependLatest(msgs) {
     frag.append(makeLatestEl(m));
     prev = m;
   }
-  const before = sc.scrollHeight;
-  list.prepend(frag);
-  sc.scrollTop += sc.scrollHeight - before;
+  prependKeepingView(sc, list, frag, drop);
 }
 
 // Back at the bottom of Latest after scrolling far up: keep only the newest
@@ -8447,7 +8457,9 @@ function wireMessageList() {
         maybeMarkRead();
       }
       updateJumpLatest();
-      if (sc.scrollTop < 240) {
+      // Well before the top (a screen and a half), so the older page is
+      // usually in before you get there rather than you waiting at the edge.
+      if (sc.scrollTop < Math.max(600, sc.clientHeight * 1.5)) {
         if (state.currentId) loadOlder(state.currentId);
         else if (state.latest) loadOlderLatest();
       }
