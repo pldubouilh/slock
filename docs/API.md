@@ -239,7 +239,7 @@ Each element is an Attachment plus `user_id` and `created_at` from its message.
   "snippet": "…a <mark>pixel</mark> perfect…" }
 ```
 
-`notes` are the notes you can open (yours, or public ones unless you are limited to an allowlist) whose text contains every word of the query, case-insensitive substring match, most recently edited first, at most 5. A query with `from:` or `in:` returns none. `at` / `len` locate the first match in UTF-16 units, as the editor counts, so the client opens the note with it selected:
+`notes` are the notes you can open (yours, or public ones unless you are limited to an allowlist) whose text contains every word of the query, case- and accent-insensitive substring match, most recently edited first, at most 5. A query with `from:` or `in:` returns none. `at` / `len` locate the first match in UTF-16 units, as the editor counts, so the client opens the note with it selected:
 
 ```jsonc
 { "channel_id": 40, "name": "Groceries", "updated_at": "2026-10-20T09:12:00Z",
@@ -258,6 +258,7 @@ Query grammar — filters may appear anywhere, remaining words are the text:
   `www.research.example.co.uk`. Quoted phrases, `or` and `-negation` keep their
   websearch meaning.
 - A message also matches when one of its files' names contains every word of the text (case-insensitive substring, quotes dropped, as for notes). When only the file name matched, its `snippet` leads with `📎 ` and that name, matches marked, then ` — ` and the start of the text if there is any.
+- Diacritics never matter, in messages, notes and file names alike: `lea` finds "Léa" and `Léa` finds "Lea". Messages are indexed and queried through the `slock_english` / `slock_simple` text search configurations (migration 0014: the `unaccent` dictionary in front of `english` / `simple`, which needs the `unaccent` extension, shipped with the postgres images), so snippets still mark the word as written. Notes and file names compare `unaccent()`ed text.
 
 Results are limited to channels the caller can read, newest first, default
 limit 30 (max 100). `snippet` is server-rendered with `ts_headline`; it is

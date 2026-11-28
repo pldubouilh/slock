@@ -188,9 +188,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 		// The prefix arm uses the simple config on both sides: the tsvector
 		// stores unstemmed lexemes alongside the english ones (0004), and
 		// stemming the query here would shorten the very prefix being typed.
-		tsq := "websearch_to_tsquery('english', " + p + ")"
+		// The slock_* configurations fold diacritics on both sides (0014):
+		// "lea" finds "Léa", and the headline still marks "Léa".
+		tsq := "websearch_to_tsquery('slock_english', " + p + ")"
 		if pre := prefixTSQuery(q.Text); pre != "" {
-			tsq = "(" + tsq + " || to_tsquery('simple', " + arg(pre) + "))"
+			tsq = "(" + tsq + " || to_tsquery('slock_simple', " + arg(pre) + "))"
 		}
 		// A message also matches when one of its files is named with every
 		// word (substring, as for notes). The union keeps the GIN index on the
@@ -199,13 +201,13 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) error {
 		if words := noteSearchWords(q.Text); len(words) > 0 {
 			var conds []string
 			for _, w := range words {
-				conds = append(conds, "a.filename ILIKE "+arg("%"+likeEscape(w)+"%"))
+				conds = append(conds, "unaccent(a.filename) ILIKE "+arg("%"+likeEscape(w)+"%"))
 			}
 			hit += " UNION SELECT a.message_id FROM attachments a WHERE a.message_id IS NOT NULL AND " +
 				strings.Join(conds, " AND ")
 		}
 		where = append(where, "m.id IN ("+hit+")")
-		snippet = "ts_headline('english', m.body, " + tsq + ", " + arg(headlineOptions) + ")"
+		snippet = "ts_headline('slock_english', m.body, " + tsq + ", " + arg(headlineOptions) + ")"
 	}
 	if q.From != "" {
 		where = append(where, "lower(u.display_name) = lower("+arg(q.From)+")")

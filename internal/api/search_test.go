@@ -124,3 +124,23 @@ func TestFileSnippet(t *testing.T) {
 		t.Errorf("no file hit: got %q, want %q", got, want)
 	}
 }
+
+func TestSearchIgnoresDiacritics(t *testing.T) {
+	if got := noteSearchWords(`Léa "ÇA"`); strings.Join(got, ",") != "lea,ca" {
+		t.Errorf("noteSearchWords = %q", got)
+	}
+	// Either side may carry the accent; the mark covers the word as written.
+	snip, at, n, ok := noteSnippet("Dîner avec Léa à Besançon", noteSearchWords("lea besancon"))
+	if !ok {
+		t.Fatal("no match")
+	}
+	if want := "Dîner avec <mark>Léa</mark> à <mark>Besançon</mark>"; snip != want {
+		t.Errorf("snippet = %q, want %q", snip, want)
+	}
+	if at != 11 || n != 3 {
+		t.Errorf("at, len = %d, %d", at, n)
+	}
+	if _, _, _, ok := noteSnippet("Lea", noteSearchWords("Léa")); !ok {
+		t.Error("an accented query should match plain text")
+	}
+}

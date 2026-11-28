@@ -2729,7 +2729,7 @@ async function showNote(ch, opts = {}) {
 // used instead.
 function revealNoteMatch(ta, { at, len, words }, focus) {
   const text = ta.value;
-  const lower = text.toLowerCase();
+  const lower = foldText(text);
   let start = -1;
   let end = -1;
   if (words.includes(lower.slice(at, at + len))) {
@@ -4717,7 +4717,7 @@ function mentionTokenAt(ta) {
   const left = ta.value.slice(0, ta.selectionStart);
   const m = left.match(/(?:^|[\s([{'">])(@([^\n@`]{0,40}))$/);
   if (!m) return null;
-  return { start: ta.selectionStart - m[1].length, query: m[2].toLowerCase() };
+  return { start: ta.selectionStart - m[1].length, query: foldText(m[2]) };
 }
 
 // People for an `@` query: name prefix before a later word's prefix, members of
@@ -4729,7 +4729,7 @@ function mentionMatches(query) {
   const rows = [];
   for (const u of state.users.values()) {
     if (u.is_bot || (state.me && u.id === state.me.id)) continue;
-    const name = (u.display_name || '').toLowerCase();
+    const name = foldText(u.display_name || '');
     let rank;
     if (name.startsWith(query)) rank = 0;
     else if (name.split(/\s+/).some((w) => w.startsWith(query))) rank = 1;
@@ -5618,9 +5618,27 @@ function parsePaletteQuery(raw) {
 }
 
 // Tiny subsequence fuzzy matcher; higher is better, -1 = no match.
+// s lowercased without diacritics ("Léa" → "lea"), so typing plain letters
+// finds accented names and the other way round. Character for character (a
+// precomposed letter becomes its base letter), so an index into the folded
+// text is an index into the original.
+// Letters with a stroke rather than an accent, which NFD leaves whole.
+const FOLD_STROKES = { 'ø': 'o', 'ł': 'l', 'đ': 'd', 'ħ': 'h', 'ŧ': 't', 'ı': 'i' };
+function foldText(s) {
+  s = s.toLowerCase();
+  if (!/[^\x00-\x7f]/.test(s)) return s;
+  let out = '';
+  for (const c of s) {
+    if (FOLD_STROKES[c]) { out += FOLD_STROKES[c]; continue; }
+    const d = c.length === 1 ? c.normalize('NFD') : c;
+    out += d.length > 1 && /^[\u0300-\u036f]+$/.test(d.slice(1)) ? d[0] : c;
+  }
+  return out;
+}
+
 function fuzzyScore(needle, hay) {
-  needle = needle.toLowerCase();
-  hay = hay.toLowerCase();
+  needle = foldText(needle);
+  hay = foldText(hay);
   if (!needle) return 0;
   let score = 0, hi = 0;
   for (let ni = 0; ni < needle.length; ni++) {
@@ -5823,8 +5841,9 @@ function renderPalette() {
 
   if (pal.noteResults.length) {
     list.append(paletteGroupHeader('In notes'));
-    // The words the server matched on (quotes dropped, lowercased, as it does).
-    const words = q.textStr.replace(/"/g, ' ').toLowerCase().split(/\s+/).filter(Boolean);
+    // The words the server matched on (quotes dropped, lowercased and without
+    // diacritics, as it does).
+    const words = foldText(q.textStr.replace(/"/g, ' ')).split(/\s+/).filter(Boolean);
     for (const r of pal.noteResults) {
       const li = tpl('tpl-search-result') || tpl('tpl-palette-item');
       if (!li) break;

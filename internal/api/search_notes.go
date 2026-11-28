@@ -25,14 +25,14 @@ type noteHit struct {
 
 const noteHitsMax = 5
 
-// noteSearchWords are the words a note must contain, lowercased: the free
-// text of the query, quotes dropped. Notes are matched by plain substring,
-// not the messages' full-text index — few enough to scan, and their text can
-// outgrow what a tsvector holds.
+// noteSearchWords are the words a note must contain, lowercased and without
+// diacritics (foldText): the free text of the query, quotes dropped. Notes
+// are matched by plain substring, not the messages' full-text index — few
+// enough to scan, and their text can outgrow what a tsvector holds.
 func noteSearchWords(text string) []string {
 	var out []string
 	for _, w := range strings.Fields(strings.ReplaceAll(text, `"`, " ")) {
-		out = append(out, strings.ToLower(w))
+		out = append(out, foldText(w))
 		if len(out) == 8 {
 			break
 		}
@@ -57,7 +57,7 @@ func (s *Server) searchNotes(ctx context.Context, me *db.User, words []string) (
 	var conds []string
 	for _, w := range words {
 		args = append(args, "%"+likeEscape(w)+"%")
-		conds = append(conds, "n.body ILIKE $"+strconv.Itoa(len(args)))
+		conds = append(conds, "unaccent(n.body) ILIKE $"+strconv.Itoa(len(args)))
 	}
 	rows, err := s.DB.Pool.Query(ctx, `
 		SELECT c.id, c.name, n.body, n.updated_at
@@ -81,7 +81,7 @@ func (s *Server) searchNotes(ctx context.Context, me *db.User, words []string) (
 		}
 		snip, at, n, ok := noteSnippet(body, words)
 		if !ok {
-			continue // ILIKE folds case a little differently; trust the snippet's view
+			continue // ILIKE and unaccent fold a little differently; trust the snippet's view
 		}
 		h.Snippet, h.At, h.Len = snip, at, n
 		hits = append(hits, h)
@@ -95,9 +95,9 @@ func (s *Server) searchNotes(ctx context.Context, me *db.User, words []string) (
 func noteSnippet(body string, words []string) (snippet string, at, n int, ok bool) {
 	const before, after = 60, 140
 	text := []rune(body)
-	lower := make([]rune, len(text))
+	lower := make([]rune, len(text)) // folded rune for rune, so indexes line up
 	for i, r := range text {
-		lower[i] = unicode.ToLower(r)
+		lower[i] = foldRune(r)
 	}
 	pats := make([][]rune, 0, len(words))
 	first, firstLen := -1, 0
@@ -149,6 +149,42 @@ func noteSnippet(body string, words []string) (snippet string, at, n int, ok boo
 		sb.WriteString("…")
 	}
 	return sb.String(), utf16Len(text[:first]), utf16Len(text[first : first+firstLen]), true
+}
+
+// foldRunes maps a Latin letter with a diacritic to the plain letter, like
+// unaccent does in the database for the common cases. Rune for rune, so a
+// match found in folded text sits at the same place in the original.
+var foldRunes = func() map[rune]rune {
+	m := map[rune]rune{}
+	for _, row := range []string{
+		"aàáâãäåāăąǎ", "cçćĉċč", "dďđ", "eèéêëēĕėęě", "gĝğġģ", "hĥħ",
+		"iìíîïĩīĭįı", "jĵ", "kķ", "lĺļľŀł", "nñńņň", "oòóôõöøōŏőǒ",
+		"rŕŗř", "sśŝşšș", "tţťŧț", "uùúûüũūŭůűųǔ", "wŵ", "yýÿŷ", "zźżž",
+	} {
+		plain := []rune(row)
+		for _, r := range plain[1:] {
+			m[r] = plain[0]
+		}
+	}
+	return m
+}()
+
+// foldRune lowercases r and drops its diacritic.
+func foldRune(r rune) rune {
+	r = unicode.ToLower(r)
+	if f, ok := foldRunes[r]; ok {
+		return f
+	}
+	return r
+}
+
+// foldText is s lowercased without diacritics, rune for rune.
+func foldText(s string) string {
+	rs := []rune(s)
+	for i, r := range rs {
+		rs[i] = foldRune(r)
+	}
+	return string(rs)
 }
 
 // runeIndex is the first index ≥ from where p occurs in s, or -1.
